@@ -1,0 +1,29 @@
+{
+  "ollama": {
+    "base_model": "gemma4",
+    "agent_model": "gemma4-agent",
+    "host": "http://127.0.0.1:11434",
+    "startup_timeout_sec": 60,
+    "interactive_commands": [
+      "/set nothink",
+      "/set format json",
+      "/set system You are a desktop coding agent. Reply with minimal JSON only: {\"script\": \"short intent\", \"code\": \"python only\"}. No markdown, no prose."
+    ]
+  },
+  "formats": {
+    "response_schema": {
+      "script": "short description of what the code does",
+      "code": "executable python only"
+    },
+    "example": {
+      "script": "print hello",
+      "code": "print('hello')\n"
+    }
+  },
+  "ui": {
+    "title": "Desktop AI Agent — Ollama Setup",
+    "width": 820,
+    "height": 640,
+    "auto_open": true
+  }
+}
