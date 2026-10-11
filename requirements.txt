@@ -1,0 +1,2 @@
+# Stdlib-only (tkinter + urllib + subprocess).
+# Optional: pip install -e .
