@@ -156,13 +156,14 @@ class LauncherApp:
 
         def worker() -> None:
             try:
-                self.root.after(0, self._append_term, "< ")
+                # Buffer stream; show clean JSON only (avoids Short/code: spam flicker).
+                chunks: list[str] = []
 
                 def on_chunk(piece: str) -> None:
-                    self.root.after(0, self._append_term, piece)
+                    chunks.append(piece)
 
-                chat.ask_stream(text, on_chunk=on_chunk)
-                self.root.after(0, self._append_term, "\n")
+                reply = chat.ask_stream(text, on_chunk=on_chunk)
+                self.root.after(0, self._append_term, f"< {reply}\n")
             except Exception as exc:  # noqa: BLE001
                 self.root.after(0, self._append_term, f"\n[error] {exc}\n")
             finally:

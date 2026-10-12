@@ -1,2 +1,3 @@
-# Stdlib-only (tkinter + urllib + subprocess).
+# Stdlib-only runtime (tkinter + urllib + subprocess).
 # Optional: pip install -e .
+# Dev tests: pip install -e ".[dev]"
