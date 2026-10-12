@@ -1,3 +1,9 @@
+﻿"""Wire layers; no business logic.
+
+Pipeline (when implemented): Input → Orchestrator → Core AI → Action → Output.
+Today only Core + UI setup launcher are active.
+"""
+
 from __future__ import annotations
 
 
