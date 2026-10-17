@@ -8,6 +8,9 @@ from typing import Any
 from desktop_ai_agent.core.chat_client import ChatClient
 from desktop_ai_agent.core.config_loader import load_setup
 from desktop_ai_agent.core.session_setup import SessionSetup
+from desktop_ai_agent.orchestrator.agent_loop import TaskResult
+from desktop_ai_agent.orchestrator.service import AgentService
+from desktop_ai_agent.ui.event_format import format_event
 
 
 class LauncherApp:
@@ -23,7 +26,8 @@ class LauncherApp:
 
         self._busy = False
         self._chat_ready = False
-        self._chat: ChatClient | None = None
+        self._chat: ChatClient | None = None  # gemma4-agent profile from setup; no longer used for chatting
+        self._agent: AgentService | None = None  # what prompts actually go through now
         self._build()
         if ui.get("auto_open", True):
             self.root.after(200, self._on_open)
@@ -116,11 +120,15 @@ class LauncherApp:
             self.prompt.configure(state=tk.DISABLED)
             self.send_btn.configure(state=tk.DISABLED)
 
+    def _set_agent(self, agent: AgentService | None) -> None:
+        self._agent = agent
+
     def _on_open(self) -> None:
         if self._busy:
             return
         self._set_busy(True)
         self._set_chat_ready(False)
+        self._set_agent(None)
         self._append_log("--- Full setup ---")
         self._append_term("\n[setup] configuring agent...\n")
 
@@ -128,11 +136,17 @@ class LauncherApp:
             try:
                 session = SessionSetup(self.setup)
                 chat = session.run_full_open(log=lambda m: self.root.after(0, self._append_log, m))
+                # Prompts go through the action layer using the BASE model plus our own
+                # system prompt (see orchestrator/prompts.py). The gemma4-agent profile
+                # above is still created by setup, but it is not used for chatting.
+                agent = AgentService.create(model=session.base_model, host=session.host)
+                self.root.after(0, self._set_agent, agent)
                 self.root.after(0, self._set_chat_ready, True, chat)
                 self.root.after(
                     0,
                     self._append_term,
-                    "[ready] type a prompt below. JSON replies: {\"script\",\"code\"}\n",
+                    "[ready] type a prompt below. I act through the action layer; "
+                    "if no action fits, I can offer a script as JSON.\n",
                 )
             except Exception as exc:  # noqa: BLE001
                 self.root.after(0, self._append_log, f"ERROR: {exc}")
@@ -143,32 +157,38 @@ class LauncherApp:
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_send(self) -> None:
-        if self._busy or not self._chat_ready or self._chat is None:
+        if self._busy or not self._chat_ready or self._agent is None:
             return
         text = self.prompt.get().strip()
         if not text:
             return
         self.prompt.delete(0, tk.END)
         self._append_term(f"\n> {text}\n")
+        self._send_agent(text)
+
+    def _send_agent(self, text: str) -> None:
+        """Run the prompt through the action layer; events stream into the terminal."""
+        agent = self._agent
+        assert agent is not None
         self._set_busy(True)
+        self._append_term("< ")
 
-        chat = self._chat
-
-        def worker() -> None:
+        def on_event(kind: str, data: Any) -> None:  # runs on the agent's thread
             try:
-                self.root.after(0, self._append_term, "< ")
-
-                def on_chunk(piece: str) -> None:
-                    self.root.after(0, self._append_term, piece)
-
-                chat.ask_stream(text, on_chunk=on_chunk)
-                self.root.after(0, self._append_term, "\n")
+                line = format_event(kind, data)
             except Exception as exc:  # noqa: BLE001
-                self.root.after(0, self._append_term, f"\n[error] {exc}\n")
-            finally:
-                self.root.after(0, self._set_busy, False)
+                line = f"[display error] {exc}\n"
+            if line:
+                self.root.after(0, self._append_term, line)
 
-        threading.Thread(target=worker, daemon=True).start()
+        def on_done(result: TaskResult) -> None:  # runs on the agent's thread
+            if result.status != "done":  # on "done" the final text was already shown
+                self.root.after(0, self._append_term, f"[{result.status}] {result.text}\n")
+            self.root.after(0, self._set_busy, False)
+
+        if not agent.submit(text, on_event=on_event, on_done=on_done):
+            self._append_term("[busy] the agent is still working on the previous request\n")
+            self._set_busy(False)
 
     def run(self) -> None:
         self.root.mainloop()
