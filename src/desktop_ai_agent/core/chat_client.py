@@ -7,6 +7,12 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
+from desktop_ai_agent.core.response_format import (
+    AGENT_JSON_SCHEMA,
+    agent_system_prompt,
+    normalize_agent_reply,
+)
+
 
 LogFn = Callable[[str], None]
 
@@ -29,47 +35,54 @@ class ChatClient:
         host: str = "http://127.0.0.1:11434",
         *,
         think: bool = False,
-        response_format: str | None = "json",
+        response_format: str | dict[str, Any] | None = None,
+        system: str | None = None,
+        normalize: bool = True,
         options: dict[str, Any] | None = None,
-        system_prompt: str | None = None,
     ) -> None:
         self.model = model
         self.host = host.rstrip("/")
         self.think = think
-        self.response_format = response_format
+        self.response_format: str | dict[str, Any] | None = (
+            AGENT_JSON_SCHEMA if response_format is None else response_format
+        )
+        self.system = system if system is not None else agent_system_prompt()
+        self.normalize = normalize
         # e.g. {"temperature": 0.2, "num_ctx": 8192}. None keeps Ollama's defaults.
         self.options = options
-        # Sent as the first message of every conversation. When None, whatever
-        # SYSTEM prompt the model itself carries is used (the original behaviour).
-        self.system_prompt = system_prompt
         self.messages: list[dict[str, Any]] = []
         self._seed()
 
     def _seed(self) -> None:
-        if self.system_prompt:
-            self.messages.append({"role": "system", "content": self.system_prompt})
+        if self.system:
+            self.messages.append({"role": "system", "content": self.system})
 
     def clear(self) -> None:
         self.messages.clear()
         self._seed()
 
-    # ---- plain text chat (unchanged behaviour) ------------------------------
+    # ---- plain text chat (the original JSON scriptwriter path) --------------
     def ask(self, user_text: str) -> str:
         self.messages.append({"role": "user", "content": user_text})
         chunks: list[str] = []
         for piece in self._stream():
             chunks.append(piece)
-        reply = "".join(chunks)
+        reply = self._finalize("".join(chunks), user_text)
         self.messages.append({"role": "assistant", "content": reply})
         return reply
 
     def ask_stream(self, user_text: str, on_chunk: Callable[[str], None]) -> str:
+        """
+        Stream tokens live, then replace with normalized JSON when done.
+        on_chunk receives pieces; after stream, on_chunk may get a full cleaned body
+        only via return value — caller should prefer the returned string.
+        """
         self.messages.append({"role": "user", "content": user_text})
         chunks: list[str] = []
         for piece in self._stream():
             chunks.append(piece)
             on_chunk(piece)
-        reply = "".join(chunks)
+        reply = self._finalize("".join(chunks), user_text)
         self.messages.append({"role": "assistant", "content": reply})
         return reply
 
@@ -93,7 +106,8 @@ class ChatClient:
         """Run one model turn on the current history. Does NOT add a user message.
 
         When `tools` is given, the JSON `format` constraint is dropped (it is
-        meant for plain JSON replies and can interfere with tool calling).
+        meant for plain JSON replies and can interfere with tool calling), and the
+        reply is NOT passed through normalize_agent_reply.
         """
         turn = ChatTurn()
         parts: list[str] = []
@@ -117,7 +131,12 @@ class ChatClient:
         self.messages.append(entry)
         return turn
 
-    # ---- HTTP plumbing -------------------------------------------------------
+    # ---- helpers and HTTP plumbing -------------------------------------------
+    def _finalize(self, raw: str, user_text: str = "") -> str:
+        if not self.normalize:
+            return raw
+        return normalize_agent_reply(raw, user_text=user_text)
+
     def _payload(self, tools: list[dict[str, Any]] | None) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.model,
@@ -129,7 +148,7 @@ class ChatClient:
             payload["options"] = self.options
         if tools:
             payload["tools"] = tools
-        elif self.response_format:
+        elif self.response_format is not None:
             payload["format"] = self.response_format
         return payload
 

@@ -24,7 +24,7 @@ class TestSystemPrompt(unittest.TestCase):
                 self.assertNotIn(name, SYSTEM_PROMPT)
 
     def test_chat_client_sends_it_first_and_keeps_it_after_clear(self):
-        c = ChatClient("m", system_prompt=SYSTEM_PROMPT)
+        c = ChatClient("m", system=SYSTEM_PROMPT)
         c.add_user("hi")
         c.clear()
         self.assertEqual(c.messages, [{"role": "system", "content": SYSTEM_PROMPT}])

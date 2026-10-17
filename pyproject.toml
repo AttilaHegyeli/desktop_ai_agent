@@ -10,8 +10,16 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
 [project.scripts]
 desktop-ai-agent = "desktop_ai_agent.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"

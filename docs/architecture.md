@@ -2,6 +2,8 @@
 
 Ez a dokumentum a multimodális (hang, látás, gesztusok) asztali AI ágens adatfolyamát és technológiai felépítését részletezi a fő végrehajtási lánc alapján: `Input -> Orchestrator -> Core AI -> Action Layer -> Output`.
 
+> **Implementation note (now):** Only **Core AI** (+ Program Files index + setup UI) is implemented. See [core.md](core.md) for the live flow. Action Layer / Orchestrator / Input are planned.
+
 ---
 
 ## 1. Input (Bemeneti Réteg)

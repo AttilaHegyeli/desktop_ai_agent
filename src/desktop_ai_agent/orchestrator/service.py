@@ -43,9 +43,8 @@ class AgentService:
         client = ChatClient(
             model,
             host,
-            response_format=None,  # no forced-JSON mode: it can interfere with tool calling
             options=options or {"temperature": 0.2, "num_ctx": 8192},
-            system_prompt=system_prompt,
+            system=system_prompt,  # tool calls ignore the JSON format, so no need to disable it
         )
         audit = AuditLog(audit_path) if audit_path else AuditLog()
         return cls(client, default_executor(confirm=confirm, audit=audit))

@@ -88,7 +88,6 @@ class TestService(unittest.TestCase):
     def test_create_builds_default_stack(self):
         service = AgentService.create(audit_path=None)
         self.assertIn("wait", service.executor.registry.names())
-        self.assertIsNone(service.client.response_format)
         self.assertEqual(service.client.options["temperature"], 0.2)
 
     def test_create_seeds_system_prompt_and_keeps_it_after_reset(self):

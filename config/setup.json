@@ -6,18 +6,18 @@
     "startup_timeout_sec": 60,
     "interactive_commands": [
       "/set nothink",
-      "/set format json",
-      "/set system You are a desktop coding agent. Reply with minimal JSON only: {\"script\": \"short intent\", \"code\": \"python only\"}. No markdown, no prose."
+      "/set format json"
     ]
+  },
+  "program_files_index": {
+    "enabled": true,
+    "resolve_exe": true,
+    "drives": ["C", "D", "E"]
   },
   "formats": {
     "response_schema": {
-      "script": "short description of what the code does",
-      "code": "executable python only"
-    },
-    "example": {
-      "script": "print hello",
-      "code": "print('hello')\n"
+      "script": "snake_case job id for Action layer logs/routing",
+      "code": "python source Action will exec unchanged"
     }
   },
   "ui": {
