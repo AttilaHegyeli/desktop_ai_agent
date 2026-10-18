@@ -299,6 +299,8 @@ class LauncherApp:
         if kind == "listening":
             if detail.startswith("hey"):
                 self._append_term(f"[voice] listening for '{detail}'...\n")
+            elif detail.startswith("stopped"):
+                self._append_term("[voice] sleeping — say hey to wake again\n")
             elif detail == "no command after wake":
                 self._append_term("[voice] no command after wake — listening again\n")
         elif kind == "heard_wake":
@@ -429,8 +431,9 @@ class LauncherApp:
                 self.root.after(
                     0,
                     self._append_term,
-                    "[ready] type, use Mic, or say 'hey Zsuzsi' then your request. "
-                    "I act through the action layer; if no action fits, I can offer a script as JSON.\n",
+                    "[ready] type, use Mic, or say 'hey' to wake. Stay awake for more "
+                    "requests; say 'stop' to sleep. I act through the action layer; "
+                    "if no action fits, I can offer a script as JSON.\n",
                 )
             except Exception as exc:  # noqa: BLE001
                 self.root.after(0, self._append_log, f"ERROR: {exc}")

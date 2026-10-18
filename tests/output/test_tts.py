@@ -12,6 +12,7 @@ from desktop_ai_agent.output.tts import (
     Speaker,
     edge_available,
     from_setup,
+    text_for_speech,
     tts_available,
     tts_enabled,
 )
@@ -192,6 +193,25 @@ class TestSpeaker(unittest.TestCase):
         self.assertEqual(tts_mod._edge_rate("+10%"), "+10%")
         self.assertEqual(tts_mod._edge_rate(180), "+0%")
         self.assertEqual(tts_mod._edge_rate(216), "+10%")
+
+
+class TestTextForSpeech(unittest.TestCase):
+    def test_provide_script_json_speaks_message_not_code(self):
+        raw = '{"script":"open_notepad","code":"import os\\nos.startfile(\'notepad\')"}'
+        spoken = text_for_speech(raw)
+        self.assertIn("open notepad", spoken.lower())
+        self.assertNotIn("import", spoken)
+        self.assertNotIn("startfile", spoken)
+
+    def test_strips_markdown_code_fence(self):
+        raw = "Sure, here you go:\n```python\nprint(1)\n```\nLet me know."
+        spoken = text_for_speech(raw)
+        self.assertIn("Sure, here you go", spoken)
+        self.assertIn("Let me know", spoken)
+        self.assertNotIn("print", spoken)
+
+    def test_plain_message_unchanged(self):
+        self.assertEqual(text_for_speech("Waited two seconds."), "Waited two seconds.")
 
 
 if __name__ == "__main__":

@@ -10,8 +10,8 @@ Output (optional): wake ack / final reply / error → `output/tts.py` (pyttsx3) 
 
 Voice (optional):
 - **Mic** push-to-talk (kept): click Mic → speak → Stop → STT → submit
-- **Wake word**: after setup, continuous listen for `hey Zsuzsi` (aliases: susie/sushi/sooshi) → capture until silence → same `AgentService.submit(text)` path
-Install: `pip install -e ".[voice]"`. Config under `voice` / `voice.wake_word` in `config/setup.json` (`model_size` `base`, `language` `en`). Disable wake with `"wake_word": {"enabled": false}` without removing Mic.
+- **Wake word**: say `hey` / `hey Zsuzsi` → awake session (“yes my lord?”) → keep giving tasks without saying hey again → say **`stop`** (or sleep/goodbye) to return to wake-only listening
+Install: `pip install -e ".[voice]"`. Config under `voice` / `voice.wake_word` in `config/setup.json` (`stop_phrases`, `model_size` `base`, `language` `en`). Disable wake with `"wake_word": {"enabled": false}` without removing Mic.
 Continuous Whisper listening uses CPU; the HF “unauthenticated requests” line is only a free rate-limit tip.
 
 TTS (optional): install `pip install -e ".[tts]"`. Config under `output.tts`:

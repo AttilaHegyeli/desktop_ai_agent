@@ -5,8 +5,10 @@ Optional deps: pip install -e ".[tts]"
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import queue
+import re
 import tempfile
 import threading
 import time
@@ -18,6 +20,9 @@ MAX_SPEAK_CHARS = 500
 _DEFAULT_WAKE_ACK = "yes my lord?"
 _DEFAULT_EDGE_VOICE = "en-US-JennyNeural"
 _DEFAULT_ENGINE = "edge"
+
+# Markdown fenced code blocks (```python ... ```).
+_CODE_FENCE_RE = re.compile(r"```[\w+-]*\n.*?```", re.DOTALL)
 
 
 class TtsError(RuntimeError):
@@ -99,6 +104,34 @@ def _edge_rate(rate: Any) -> str:
     return f"{pct:+d}%"
 
 
+def text_for_speech(text: str) -> str:
+    """Return what TTS should say: message only, never script/code bodies.
+
+    - ``provide_script`` JSON → short line about the script name (no ``code``)
+    - Markdown fenced code blocks are stripped from plain replies
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+
+    if raw.startswith("{") and ("\"code\"" in raw or "'code'" in raw):
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            obj = None
+        if isinstance(obj, dict) and "code" in obj:
+            script = str(obj.get("script") or "").strip()
+            if script:
+                label = script.replace("_", " ")
+                return f"I have a script for {label}. The code is on the screen."
+            return "I have prepared a script. The code is on the screen."
+
+    cleaned = _CODE_FENCE_RE.sub("", raw)
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
+
+
 class Speaker:
     """Queue text and speak it on a background thread (non-blocking for Tk)."""
 
@@ -127,8 +160,11 @@ class Speaker:
         return self._speaking
 
     def speak(self, text: str, *, on_done: DoneFn | None = None) -> None:
-        """Enqueue text to speak. Empty/whitespace is a no-op (still calls on_done)."""
-        cleaned = (text or "").strip()
+        """Enqueue text to speak. Empty/whitespace is a no-op (still calls on_done).
+
+        Code bodies (script JSON ``code``, markdown fences) are stripped first.
+        """
+        cleaned = text_for_speech(text)
         if not cleaned:
             if on_done is not None:
                 on_done()

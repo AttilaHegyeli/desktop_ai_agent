@@ -51,7 +51,14 @@
       "post_wake_grace_sec": 5.0,
       "max_utterance_sec": 30,
       "chunk_sec": 0.8,
-      "energy_threshold": 0.005
+      "energy_threshold": 0.005,
+      "stop_phrases": [
+        "stop",
+        "sleep",
+        "go to sleep",
+        "that's all",
+        "goodbye"
+      ]
     }
   },
   "output": {
