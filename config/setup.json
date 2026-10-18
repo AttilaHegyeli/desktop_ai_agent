@@ -25,5 +25,31 @@
     "width": 820,
     "height": 640,
     "auto_open": true
+  },
+  "voice": {
+    "enabled": true,
+    "model_size": "base",
+    "language": "en",
+    "sample_rate": 16000,
+    "device": "cpu",
+    "compute_type": "int8",
+    "wake_word": {
+      "enabled": true,
+      "phrases": [
+        "Hey",
+        "hey",
+        "hey zsuzsi",
+        "hey susie",
+        "hey sushi",
+        "hey sooshi",
+        "hey suzy",
+        "hey suzie"
+      ],
+      "silence_sec": 3.0,
+      "post_wake_grace_sec": 5.0,
+      "max_utterance_sec": 30,
+      "chunk_sec": 0.8,
+      "energy_threshold": 0.005
+    }
   }
 }
