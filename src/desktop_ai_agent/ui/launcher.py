@@ -8,6 +8,7 @@ from typing import Any
 from desktop_ai_agent.core.chat_client import ChatClient
 from desktop_ai_agent.core.config_loader import load_setup
 from desktop_ai_agent.core.session_setup import SessionSetup
+from desktop_ai_agent.input.voice import PushToTalk, VoiceError, from_setup, voice_available
 from desktop_ai_agent.orchestrator.agent_loop import TaskResult
 from desktop_ai_agent.orchestrator.service import AgentService
 from desktop_ai_agent.ui.event_format import format_event
@@ -28,6 +29,9 @@ class LauncherApp:
         self._chat_ready = False
         self._chat: ChatClient | None = None  # gemma4-agent profile from setup; no longer used for chatting
         self._agent: AgentService | None = None  # what prompts actually go through now
+        self._voice_enabled = bool((self.setup.get("voice") or {}).get("enabled", True))
+        self._ptt: PushToTalk | None = None
+        self._mic_phase = "idle"  # idle | recording | transcribing
         self._build()
         if ui.get("auto_open", True):
             self.root.after(200, self._on_open)
@@ -78,6 +82,12 @@ class LauncherApp:
         self.send_btn = ttk.Button(prompt_row, text="Send", command=self._on_send, state=tk.DISABLED)
         self.send_btn.pack(side=tk.RIGHT)
 
+        self.mic_btn = ttk.Button(
+            prompt_row, text="Mic", command=self._on_mic, state=tk.DISABLED
+        )
+        if self._voice_enabled:
+            self.mic_btn.pack(side=tk.RIGHT, padx=(0, 6))
+
         buttons = ttk.Frame(frame)
         buttons.pack(fill=tk.X, padx=4)
 
@@ -104,10 +114,13 @@ class LauncherApp:
 
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
-        self.open_btn.configure(state=tk.DISABLED if busy else tk.NORMAL)
-        chat_state = tk.NORMAL if (self._chat_ready and not busy) else tk.DISABLED
+        mic_busy = self._mic_phase != "idle"
+        self.open_btn.configure(state=tk.DISABLED if (busy or mic_busy) else tk.NORMAL)
+        chat_ok = self._chat_ready and not busy and not mic_busy
+        chat_state = tk.NORMAL if chat_ok else tk.DISABLED
         self.prompt.configure(state=chat_state)
         self.send_btn.configure(state=chat_state)
+        self._refresh_mic_button()
 
     def _set_chat_ready(self, ready: bool, chat: ChatClient | None = None) -> None:
         self._chat_ready = ready
@@ -119,9 +132,88 @@ class LauncherApp:
         else:
             self.prompt.configure(state=tk.DISABLED)
             self.send_btn.configure(state=tk.DISABLED)
+        self._refresh_mic_button()
 
     def _set_agent(self, agent: AgentService | None) -> None:
         self._agent = agent
+
+    def _refresh_mic_button(self) -> None:
+        if not self._voice_enabled:
+            return
+        if self._mic_phase == "recording":
+            self.mic_btn.configure(text="Stop", state=tk.NORMAL)
+        elif self._mic_phase == "transcribing":
+            self.mic_btn.configure(text="...", state=tk.DISABLED)
+        else:
+            can_start = self._chat_ready and not self._busy and self._agent is not None
+            self.mic_btn.configure(
+                text="Mic", state=tk.NORMAL if can_start else tk.DISABLED
+            )
+
+    def _ensure_ptt(self) -> PushToTalk:
+        if self._ptt is None:
+            self._ptt = from_setup(self.setup)
+        return self._ptt
+
+    def _on_mic(self) -> None:
+        if not self._voice_enabled:
+            return
+        if self._mic_phase == "recording":
+            self._stop_mic_and_submit()
+            return
+        if self._busy or not self._chat_ready or self._agent is None:
+            return
+        if not voice_available():
+            self._append_term(
+                '[mic] Voice deps missing. Install with: pip install -e ".[voice]"\n'
+            )
+            return
+        try:
+            ptt = self._ensure_ptt()
+            ptt.start()
+        except VoiceError as exc:
+            self._append_term(f"[mic] {exc}\n")
+            return
+        self._mic_phase = "recording"
+        self.open_btn.configure(state=tk.DISABLED)
+        self.prompt.configure(state=tk.DISABLED)
+        self.send_btn.configure(state=tk.DISABLED)
+        self._refresh_mic_button()
+        self._append_term("[mic] recording... click Stop when done\n")
+
+    def _stop_mic_and_submit(self) -> None:
+        ptt = self._ptt
+        if ptt is None:
+            self._mic_phase = "idle"
+            self._refresh_mic_button()
+            return
+        self._mic_phase = "transcribing"
+        self._refresh_mic_button()
+        self._append_term("[mic] transcribing...\n")
+
+        def worker() -> None:
+            try:
+                text = ptt.stop_and_transcribe()
+            except VoiceError as exc:
+                self.root.after(0, self._on_mic_failed, str(exc))
+                return
+            self.root.after(0, self._on_mic_transcript, text)
+
+        threading.Thread(target=worker, daemon=True, name="voice-stt").start()
+
+    def _on_mic_failed(self, message: str) -> None:
+        self._mic_phase = "idle"
+        self._set_busy(self._busy)  # refresh prompt/send/open/mic from current flags
+        self._append_term(f"[mic] {message}\n")
+
+    def _on_mic_transcript(self, text: str) -> None:
+        self._mic_phase = "idle"
+        if not text:
+            self._set_busy(self._busy)
+            self._append_term("[mic] no speech detected\n")
+            return
+        self._append_term(f"\n> {text}\n")
+        self._send_agent(text)
 
     def _on_open(self) -> None:
         if self._busy:
@@ -145,7 +237,7 @@ class LauncherApp:
                 self.root.after(
                     0,
                     self._append_term,
-                    "[ready] type a prompt below. I act through the action layer; "
+                    "[ready] type a prompt below (or use Mic). I act through the action layer; "
                     "if no action fits, I can offer a script as JSON.\n",
                 )
             except Exception as exc:  # noqa: BLE001
