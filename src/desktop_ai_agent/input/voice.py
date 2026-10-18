@@ -422,15 +422,21 @@ class WakeListener:
             thread.join(timeout=2.0)
         self._thread = None
 
-    def pause(self) -> None:
-        """Release the mic so push-to-talk can use it; keep the worker alive."""
+    def pause(self, *, keep_command: bool = False) -> None:
+        """Release the mic so TTS / push-to-talk can use it; keep the worker alive.
+
+        keep_command=True: stay in command phase (wake-ack TTS). Default resets to wake.
+        """
         self._paused = True
         with self._lock:
             stream = self._stream
             self._stream = None
             self._frames = []
-            self._phase = "wake"
-            self._heard_voice = False
+            if keep_command and self._phase == "command":
+                pass  # keep phase; timers refreshed on resume
+            else:
+                self._phase = "wake"
+                self._heard_voice = False
         if stream is not None:
             try:
                 stream.stop()
@@ -439,16 +445,27 @@ class WakeListener:
                 pass
         self.on_status("paused", "mic")
 
-    def resume(self) -> None:
-        """Re-open the mic after push-to-talk / agent busy."""
+    def resume(self, *, refresh_command: bool = False) -> None:
+        """Re-open the mic after TTS / push-to-talk / agent busy.
+
+        refresh_command=True: after wake-ack TTS, restart the command grace timer
+        so the user can speak the task once the ack finishes.
+        """
         import sounddevice as sd
 
         if not self._running:
             return
         with self._lock:
             self._frames = []
-            self._phase = "wake"
-            self._heard_voice = False
+            staying_in_command = refresh_command and self._phase == "command"
+            if staying_in_command:
+                now = time.monotonic()
+                self._cmd_started_at = now
+                self._last_voice_at = now
+                self._heard_voice = False
+            else:
+                self._phase = "wake"
+                self._heard_voice = False
             if self._stream is None:
                 def callback(indata: Any, frames: int, time_info: Any, status: Any) -> None:
                     if self._running and not self._paused:
@@ -466,7 +483,10 @@ class WakeListener:
                     self.on_status("error", f"Could not reopen microphone: {exc}")
                     return
             self._paused = False
-        self.on_status("listening", "hey Zsuzsi")
+        if staying_in_command:
+            self.on_status("capturing", "ready for command")
+        else:
+            self.on_status("listening", "hey Zsuzsi")
 
     def _take_audio(self, max_sec: float | None = None) -> Any:
         import numpy as np

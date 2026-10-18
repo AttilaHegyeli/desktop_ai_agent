@@ -21,6 +21,13 @@ from desktop_ai_agent.input.voice import (
 )
 from desktop_ai_agent.orchestrator.agent_loop import TaskResult
 from desktop_ai_agent.orchestrator.service import AgentService
+from desktop_ai_agent.output.tts import (
+    Speaker,
+    TtsError,
+    from_setup as tts_from_setup,
+    tts_available,
+    tts_enabled,
+)
 from desktop_ai_agent.ui.event_format import format_event
 
 
@@ -46,6 +53,10 @@ class LauncherApp:
         self._ptt: PushToTalk | None = None
         self._wake: WakeListener | None = None
         self._mic_phase = "idle"  # idle | recording | transcribing
+        self._tts_enabled = tts_enabled(self.setup)
+        self._speaker: Speaker | None = None
+        self._tts_speaking = False
+        self._tts_keep_command = False  # wake-ack: resume into command phase
         self._build()
         if ui.get("auto_open", True):
             self.root.after(200, self._on_open)
@@ -113,6 +124,56 @@ class LauncherApp:
 
         self._append_log("Starting automatically from: python -m app")
         self._append_term("Waiting for setup...\n")
+
+    def _ensure_speaker(self) -> Speaker | None:
+        """Lazy-create Speaker when TTS is enabled and deps are installed."""
+        if not self._tts_enabled:
+            return None
+        if self._speaker is not None:
+            return self._speaker
+        if not tts_available():
+            self._append_term(
+                '[tts] deps missing. Install with: pip install -e ".[tts]"\n'
+            )
+            self._tts_enabled = False
+            return None
+        try:
+            self._speaker = tts_from_setup(self.setup)
+        except TtsError as exc:
+            self._append_term(f"[tts] {exc}\n")
+            self._tts_enabled = False
+            return None
+        return self._speaker
+
+    def _speak(self, text: str, *, keep_command: bool = False) -> None:
+        """Speak text if TTS is on; mute mic until playback finishes.
+
+        keep_command=True: wake-ack path — stay in command phase so the user
+        can say the task right after 'yes my lord?'.
+        """
+        speaker = self._ensure_speaker()
+        if speaker is None:
+            return
+        self._tts_speaking = True
+        self._tts_keep_command = keep_command
+        self._pause_wake(keep_command=keep_command)
+
+        def on_done() -> None:
+            self.root.after(0, self._on_tts_done)
+
+        try:
+            speaker.speak(text, on_done=on_done)
+        except TtsError as exc:
+            self._tts_speaking = False
+            self._tts_keep_command = False
+            self._append_term(f"[tts] {exc}\n")
+            self._resume_wake(refresh_command=keep_command)
+
+    def _on_tts_done(self) -> None:
+        keep = self._tts_keep_command
+        self._tts_speaking = False
+        self._tts_keep_command = False
+        self._resume_wake(refresh_command=keep)
 
     def _append_log(self, message: str) -> None:
         self.log.configure(state=tk.NORMAL)
@@ -219,19 +280,20 @@ class LauncherApp:
         if wake is not None:
             wake.stop()
 
-    def _pause_wake(self) -> None:
+    def _pause_wake(self, *, keep_command: bool = False) -> None:
         if self._wake is not None and self._wake.is_running:
-            self._wake.pause()
+            self._wake.pause(keep_command=keep_command)
 
-    def _resume_wake(self) -> None:
+    def _resume_wake(self, *, refresh_command: bool = False) -> None:
         if (
             self._wake is not None
             and self._wake.is_running
             and self._chat_ready
             and not self._busy
             and self._mic_phase == "idle"
+            and not self._tts_speaking
         ):
-            self._wake.resume()
+            self._wake.resume(refresh_command=refresh_command)
 
     def _on_wake_status(self, kind: str, detail: str) -> None:
         if kind == "listening":
@@ -240,9 +302,21 @@ class LauncherApp:
             elif detail == "no command after wake":
                 self._append_term("[voice] no command after wake — listening again\n")
         elif kind == "heard_wake":
-            # Acknowledgement in the terminal when the wake word is detected.
-            self._append_term("yes my lord?\n")
-            self._append_log(f"yes my lord? (wake: {detail})")
+            # Acknowledgement in the terminal + speakers when the wake word is detected.
+            speaker = self._ensure_speaker()
+            ack = (
+                speaker.wake_ack
+                if speaker is not None
+                else (
+                    ((self.setup.get("output") or {}).get("tts") or {}).get("wake_ack")
+                    or "yes my lord?"
+                )
+            )
+            self._append_term(f"{ack}\n")
+            self._append_log(f"{ack} (wake: {detail})")
+            if speaker is not None:
+                # Mute mic during ack but stay in command phase for the task.
+                self._speak(ack, keep_command=True)
         elif kind == "miss":
             # What Whisper heard that did not match — helps tune aliases.
             self._append_term(f'[voice] heard "{detail}" (not wake)\n')
@@ -328,6 +402,8 @@ class LauncherApp:
         self._stop_wake()
         if self._ptt is not None and self._ptt.is_recording:
             self._ptt.cancel()
+        if self._speaker is not None:
+            self._speaker.stop()
         self.root.destroy()
 
     def _on_open(self) -> None:
@@ -388,10 +464,15 @@ class LauncherApp:
                 line = f"[display error] {exc}\n"
             if line:
                 self.root.after(0, self._append_term, line)
+            if kind == "final" and data:
+                self.root.after(0, self._speak, str(data))
 
         def on_done(result: TaskResult) -> None:  # runs on the agent's thread
             if result.status != "done":  # on "done" the final text was already shown
-                self.root.after(0, self._append_term, f"[{result.status}] {result.text}\n")
+                msg = f"[{result.status}] {result.text}"
+                self.root.after(0, self._append_term, msg + "\n")
+                if result.text:
+                    self.root.after(0, self._speak, msg)
             self.root.after(0, self._set_busy, False)
 
         if not agent.submit(text, on_event=on_event, on_done=on_done):

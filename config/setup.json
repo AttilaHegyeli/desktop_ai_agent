@@ -36,6 +36,8 @@
     "wake_word": {
       "enabled": true,
       "phrases": [
+        "Zsuzsi",
+        "hi",
         "Hey",
         "hey",
         "hey zsuzsi",
@@ -50,6 +52,16 @@
       "max_utterance_sec": 30,
       "chunk_sec": 0.8,
       "energy_threshold": 0.005
+    }
+  },
+  "output": {
+    "tts": {
+      "enabled": true,
+      "engine": "edge",
+      "voice": "en-US-JennyNeural",
+      "rate": "+0%",
+      "volume": 1.0,
+      "wake_ack": "yes my lord?"
     }
   }
 }
