@@ -181,6 +181,17 @@ def build_default_registry() -> ActionRegistry:
                 ),
             ),
             ActionSpec(
+                name="open_app",
+                description=(
+                    "Open an installed Windows application by name, for example 'steam' or "
+                    "'vs code'. Only programs found in the program index can be opened."
+                ),
+                risk=Risk.MEDIUM,
+                params=(
+                    Param("name", "string", "Application name, e.g. steam or vs code", max_length=100),
+                ),
+            ),
+            ActionSpec(
                 name="provide_script",
                 description=(
                     "Show the user a Python script as JSON in the chat. Use it only after "
