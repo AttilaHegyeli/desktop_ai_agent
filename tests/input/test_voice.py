@@ -15,6 +15,7 @@ except ImportError:
 
 from desktop_ai_agent.input.voice import (
     VoiceError,
+    is_stop_command,
     match_wake_phrase,
     normalize_text,
     strip_after_wake,
@@ -77,6 +78,14 @@ class TestWakePhraseHelpers(unittest.TestCase):
             wake_enabled({"voice": {"enabled": True, "wake_word": {"enabled": False}}})
         )
         self.assertFalse(wake_enabled({"voice": {"enabled": False}}))
+
+    def test_stop_command(self):
+        self.assertTrue(is_stop_command("stop"))
+        self.assertTrue(is_stop_command("Stop!"))
+        self.assertTrue(is_stop_command("stop please"))
+        self.assertTrue(is_stop_command("go to sleep"))
+        self.assertFalse(is_stop_command("wait two seconds"))
+        self.assertFalse(is_stop_command("stop the timer please now forever"))
 
 
 class TestPushToTalkInit(unittest.TestCase):
@@ -198,12 +207,33 @@ class TestPushToTalkFlow(unittest.TestCase):
                         "wake_word": {
                             "phrases": ["hey zsuzsi"],
                             "silence_sec": 2.0,
+                            "stop_phrases": ["stop", "sleep"],
                         },
                     }
                 }
             )
         self.assertEqual(wake.phrases, ("hey zsuzsi",))
         self.assertEqual(wake.silence_sec, 2.0)
+        self.assertEqual(wake.stop_phrases, ("stop", "sleep"))
+
+    def test_pause_resume_keeps_awake_session(self):
+        with patch("desktop_ai_agent.input.voice.voice_available", return_value=True):
+            from desktop_ai_agent.input.voice import WakeListener, WhisperEngine
+
+            engine = WhisperEngine(model_size="tiny")
+            # Avoid loading a real model
+            engine._model = object()
+            wake = WakeListener(engine, phrases=["hey"], silence_sec=0.5)
+            wake._running = True
+            wake._awake = True
+            wake._phase = "command"
+            wake.pause()
+            self.assertTrue(wake.is_awake)
+            self.assertEqual(wake._phase, "command")
+            wake.resume()
+            self.assertTrue(wake.is_awake)
+            self.assertEqual(wake._phase, "command")
+            wake._running = False
 
 
 @unittest.skipUnless(HAS_NUMPY, "numpy not installed (optional [voice] extra)")

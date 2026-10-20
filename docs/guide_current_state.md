@@ -1,20 +1,29 @@
 # Desktop AI Agent: quick guide
 
 ## What it does
-The user types a request, uses **Mic** push-to-talk, or says **“hey Zsuzsi”** then a request. The model (gemma4 via Ollama) picks a **tool**, the **action layer** validates and runs it, and the result is shown in the terminal.
+The user types a request, uses **Mic** push-to-talk, or says **“hey Zsuzsi”** then a request. The model (gemma4 via Ollama) picks a **tool**, the **action layer** validates and runs it, and the result is shown in the terminal (and spoken if TTS is on).
 If no tool fits, the model says so and asks "Do you want a script for it?". If the user says yes, it returns ONE line of JSON: `{"script": "...", "code": "..."}`. The script is only displayed, never executed.
 
 ## Flow
 UI (`launcher.py`) -> `AgentService` -> `agent_loop` -> model (`chat_client`) -> **executor** -> **handlers**
+Output (optional): wake ack / final reply / error → `output/tts.py` (pyttsx3) → speakers.
 
 Voice (optional):
 - **Mic** push-to-talk (kept): click Mic → speak → Stop → STT → submit
-- **Wake word**: after setup, continuous listen for `hey Zsuzsi` (aliases: susie/sushi/sooshi) → capture until silence → same `AgentService.submit(text)` path
-Install: `pip install -e ".[voice]"`. Config under `voice` / `voice.wake_word` in `config/setup.json` (`model_size` `base`, `language` `en`). Disable wake with `"wake_word": {"enabled": false}` without removing Mic.
+- **Wake word**: say `hey` / `hey Zsuzsi` → awake session (“yes my lord?”) → keep giving tasks without saying hey again → say **`stop`** (or sleep/goodbye) to return to wake-only listening
+Install: `pip install -e ".[voice]"`. Config under `voice` / `voice.wake_word` in `config/setup.json` (`stop_phrases`, `model_size` `base`, `language` `en`). Disable wake with `"wake_word": {"enabled": false}` without removing Mic.
 Continuous Whisper listening uses CPU; the HF “unauthenticated requests” line is only a free rate-limit tip.
+
+TTS (optional): install `pip install -e ".[tts]"`. Config under `output.tts`:
+- `engine`: `"edge"` (natural neural AI voice, needs internet) or `"sapi"` (offline Windows David/Zira)
+- `voice`: e.g. `en-US-JennyNeural`, `en-US-AriaNeural`, `en-GB-SoniaNeural` (edge) or `Zira` (sapi)
+- `rate`: `"+0%"` for edge, or an int like `160` for sapi
+- `wake_ack`, `volume`, `enabled`
+Speaks wake ack, final replies, and error status. List edge voices: `python -m edge_tts --list-voices`.
 
 ## Where things are (`src/desktop_ai_agent/`)
 - `input/voice.py`: push-to-talk + wake-word STT (`PushToTalk`, `WakeListener`). Optional; typed chat works without it.
+- `output/tts.py`: speaker feedback (`Speaker`). Optional; typed chat works without it.
 - `action/registry.py`: every allowed action: name, description, parameters and limits, risk level. This is the single source of truth. The model's tool list is generated from it.
 - `action/executor.py`: the gate. Checks the action exists, validates arguments, checks risk, logs, then runs.
 - `action/handlers.py`: the functions that actually do things. No safety logic here. Only the executor imports this file.
@@ -51,7 +60,7 @@ The executor refuses to start if the registry and handlers do not match.
 
 ## Known limitations
 - Small local model (gemma4 E4B). It may occasionally pick the wrong action. Check the audit log.
-- No mouse/keyboard actions yet.
-- Wake word uses rolling Whisper checks (not a dedicated wake engine); mishears are possible. No TTS / output speech yet.
+- No screen access or mouse/keyboard actions yet.
+- Wake word uses rolling Whisper checks (not a dedicated wake engine); mishears are possible.
 - Results go back to the model after every action (optimization planned).
 - The `gemma4-agent` profile is still created at startup but is no longer used for chatting.

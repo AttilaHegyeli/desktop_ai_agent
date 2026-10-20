@@ -44,6 +44,16 @@ _WAKE_NAME_ALIASES = frozenset(
 )
 _WAKE_GREETINGS = frozenset({"hey", "hi", "ok", "okay", "yo", "a"})
 
+_DEFAULT_STOP_PHRASES = (
+    "stop",
+    "sleep",
+    "go to sleep",
+    "that's all",
+    "that is all",
+    "goodbye",
+    "good bye",
+)
+
 
 class VoiceError(RuntimeError):
     """Mic / STT failure with a user-facing message."""
@@ -138,6 +148,23 @@ def strip_after_wake(text: str, phrases: list[str] | tuple[str, ...]) -> str:
         if len(normalize_text(text[:i])) >= best_end:
             return text[i:].strip(" .,!?:;-")
     return ""
+
+
+def is_stop_command(
+    text: str, phrases: list[str] | tuple[str, ...] = _DEFAULT_STOP_PHRASES
+) -> bool:
+    """True when the utterance means end the awake session (e.g. 'stop')."""
+    n = normalize_text(text)
+    if not n:
+        return False
+    stops = {normalize_text(p) for p in phrases if p}
+    if n in stops:
+        return True
+    # Short follow-ups: "stop please", "stop now"
+    parts = n.split()
+    if parts and parts[0] in stops and len(parts) <= 3:
+        return True
+    return False
 
 
 def _rms(audio: Any) -> float:
@@ -321,7 +348,10 @@ class PushToTalk:
 
 
 class WakeListener:
-    """Continuous mic listen: wake phrase → capture until silence → on_command(text)."""
+    """Wake phrase starts an awake session; commands until the user says stop.
+
+    Flow: wake → (yes my lord) → command → … more commands … → \"stop\" → wake again.
+    """
 
     def __init__(
         self,
@@ -329,6 +359,7 @@ class WakeListener:
         *,
         sample_rate: int = 16000,
         phrases: list[str] | tuple[str, ...] = _DEFAULT_WAKE_PHRASES,
+        stop_phrases: list[str] | tuple[str, ...] = _DEFAULT_STOP_PHRASES,
         silence_sec: float = 3.0,
         post_wake_grace_sec: float = 5.0,
         max_utterance_sec: float = 30.0,
@@ -341,6 +372,9 @@ class WakeListener:
         self.engine = engine
         self.sample_rate = int(sample_rate)
         self.phrases = tuple(phrases) if phrases else _DEFAULT_WAKE_PHRASES
+        self.stop_phrases = (
+            tuple(stop_phrases) if stop_phrases else _DEFAULT_STOP_PHRASES
+        )
         self.silence_sec = float(silence_sec)
         self.post_wake_grace_sec = float(post_wake_grace_sec)
         self.max_utterance_sec = float(max_utterance_sec)
@@ -356,6 +390,8 @@ class WakeListener:
         self._thread: threading.Thread | None = None
         self._frames: list[Any] = []
         self._phase = "wake"  # wake | command
+        self._awake = False  # session active until stop
+        self._suppress_capture = False  # wait for UI pause after a command
         self._cmd_started_at = 0.0
         self._last_voice_at = 0.0
         self._heard_voice = False
@@ -369,6 +405,10 @@ class WakeListener:
     def is_paused(self) -> bool:
         return self._paused
 
+    @property
+    def is_awake(self) -> bool:
+        return self._awake
+
     def start(self) -> None:
         import sounddevice as sd
 
@@ -379,6 +419,8 @@ class WakeListener:
             self._paused = False
             self._frames = []
             self._phase = "wake"
+            self._awake = False
+            self._suppress_capture = False
             self._heard_voice = False
 
             def callback(indata: Any, frames: int, time_info: Any, status: Any) -> None:
@@ -422,15 +464,24 @@ class WakeListener:
             thread.join(timeout=2.0)
         self._thread = None
 
-    def pause(self) -> None:
-        """Release the mic so push-to-talk can use it; keep the worker alive."""
+    def pause(self, *, keep_command: bool = False) -> None:
+        """Release the mic so TTS / push-to-talk can use it; keep the worker alive.
+
+        keep_command=True or an active awake session: stay ready for the next command
+        instead of falling back to wake-word listening.
+        """
         self._paused = True
+        self._suppress_capture = False
         with self._lock:
             stream = self._stream
             self._stream = None
             self._frames = []
-            self._phase = "wake"
-            self._heard_voice = False
+            if keep_command or self._awake:
+                self._phase = "command"
+                self._heard_voice = False
+            else:
+                self._phase = "wake"
+                self._heard_voice = False
         if stream is not None:
             try:
                 stream.stop()
@@ -439,16 +490,32 @@ class WakeListener:
                 pass
         self.on_status("paused", "mic")
 
-    def resume(self) -> None:
-        """Re-open the mic after push-to-talk / agent busy."""
+    def resume(self, *, refresh_command: bool = False) -> None:
+        """Re-open the mic after TTS / push-to-talk / agent busy.
+
+        If the session is awake (or refresh_command), return to command listening
+        without requiring a new wake word.
+        """
         import sounddevice as sd
 
         if not self._running:
             return
         with self._lock:
             self._frames = []
-            self._phase = "wake"
-            self._heard_voice = False
+            staying_in_command = self._awake or (
+                refresh_command and self._phase == "command"
+            )
+            if staying_in_command:
+                self._phase = "command"
+                now = time.monotonic()
+                self._cmd_started_at = now
+                self._last_voice_at = now
+                self._heard_voice = False
+                self._suppress_capture = False
+            else:
+                self._phase = "wake"
+                self._awake = False
+                self._heard_voice = False
             if self._stream is None:
                 def callback(indata: Any, frames: int, time_info: Any, status: Any) -> None:
                     if self._running and not self._paused:
@@ -466,7 +533,20 @@ class WakeListener:
                     self.on_status("error", f"Could not reopen microphone: {exc}")
                     return
             self._paused = False
-        self.on_status("listening", "hey Zsuzsi")
+        if staying_in_command:
+            self.on_status("capturing", "ready for command")
+        else:
+            self.on_status("listening", "hey Zsuzsi")
+
+    def _begin_command_listen(self) -> None:
+        """Reset timers to capture the next utterance while still awake."""
+        now = time.monotonic()
+        self._phase = "command"
+        self._awake = True
+        self._cmd_started_at = now
+        self._last_voice_at = now
+        self._heard_voice = False
+        self._clear_frames()
 
     def _take_audio(self, max_sec: float | None = None) -> Any:
         import numpy as np
@@ -500,6 +580,11 @@ class WakeListener:
             if not self._running or self._paused:
                 continue
 
+            # After submitting a command, wait until the UI pauses us so we do
+            # not capture TTS / agent audio as the next utterance.
+            if self._suppress_capture:
+                continue
+
             try:
                 if self._phase == "wake":
                     audio = self._take_audio(max_sec=wake_window)
@@ -526,6 +611,7 @@ class WakeListener:
                                 if buf.size > max_samples:
                                     self._frames = [buf[-max_samples:].reshape(-1, 1)]
                         continue
+                    self._awake = True
                     self._phase = "command"
                     self._cmd_started_at = time.monotonic()
                     self._last_voice_at = time.monotonic()
@@ -539,7 +625,7 @@ class WakeListener:
                             self._frames = [buf[-tail:].reshape(-1, 1)] if buf.size else []
                     continue
 
-                # command phase
+                # command phase (awake session — no new wake word needed)
                 now = time.monotonic()
                 with self._lock:
                     frames = list(self._frames)
@@ -562,29 +648,44 @@ class WakeListener:
                     continue
 
                 if end_empty and not end_max:
-                    self._clear_frames()
-                    self._phase = "wake"
-                    self.on_status("listening", "no command after wake")
+                    # Stay awake; keep listening for the next command.
+                    self._begin_command_listen()
+                    self.on_status("capturing", "waiting for command")
                     continue
 
                 audio = self._take_audio()
                 self._clear_frames()
-                self._phase = "wake"
                 text = self.engine.transcribe(audio) if audio.size else ""
                 command = strip_after_wake(text, self.phrases) if text else ""
+                if command and is_stop_command(command, self.stop_phrases):
+                    self._awake = False
+                    self._phase = "wake"
+                    self._heard_voice = False
+                    self.on_status("listening", "stopped — say hey to wake")
+                    continue
                 if command:
                     self.on_status("capturing", command)
+                    self._suppress_capture = True
+                    self._awake = True
+                    self._phase = "command"
                     self.on_command(command)
                 else:
-                    self.on_status("listening", "no command after wake")
+                    self._begin_command_listen()
+                    self.on_status("capturing", "waiting for command")
             except VoiceError as exc:
                 self.on_status("error", str(exc))
-                self._phase = "wake"
-                self._clear_frames()
+                if self._awake:
+                    self._begin_command_listen()
+                else:
+                    self._phase = "wake"
+                    self._clear_frames()
             except Exception as exc:  # noqa: BLE001
                 self.on_status("error", str(exc))
-                self._phase = "wake"
-                self._clear_frames()
+                if self._awake:
+                    self._begin_command_listen()
+                else:
+                    self._phase = "wake"
+                    self._clear_frames()
 
 
 def engine_from_setup(setup: dict[str, Any] | None) -> WhisperEngine:
@@ -622,10 +723,12 @@ def wake_from_setup(
     wake = voice.get("wake_word") or {}
     phrases = wake.get("phrases") or list(_DEFAULT_WAKE_PHRASES)
     eng = engine or engine_from_setup(setup)
+    stop_phrases = wake.get("stop_phrases") or list(_DEFAULT_STOP_PHRASES)
     return WakeListener(
         eng,
         sample_rate=int(voice.get("sample_rate", 16000)),
         phrases=list(phrases),
+        stop_phrases=list(stop_phrases),
         silence_sec=float(wake.get("silence_sec", 3.0)),
         post_wake_grace_sec=float(wake.get("post_wake_grace_sec", 5.0)),
         max_utterance_sec=float(wake.get("max_utterance_sec", 30)),
