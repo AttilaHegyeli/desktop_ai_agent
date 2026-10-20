@@ -32,4 +32,6 @@ def format_event(kind: str, data: Any) -> str:
         return f"[{data.status}] {data.name}: {_clip(data.error)}\n"
     if kind == "final":
         return f"{data}\n"
+    if kind == "screenshot":
+        return f"[screenshot] {data}\n"
     return ""

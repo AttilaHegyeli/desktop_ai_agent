@@ -7,5 +7,7 @@ dist/
 build/
 config/program_files_index.json
 config/program_files_index.txt
+logs/audit.jsonl
+logs/screenshots/
 tryloop.py
 

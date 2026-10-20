@@ -174,10 +174,25 @@ class TestDefaultSetup(unittest.TestCase):
         res = ex.run([{"name": "wait", "arguments": {"seconds": 0}}])
         self.assertTrue(res[0].ok)
 
-    def test_default_screenshot_reports_not_wired_instead_of_crashing(self):
-        res = default_executor().run([{"name": "screenshot"}])
+    def test_default_screenshot_reports_missing_deps_instead_of_crashing(self):
+        from unittest.mock import patch
+
+        with patch(
+            "desktop_ai_agent.action.handlers.capture_screen",
+            side_effect=ImportError('screenshot requires mss and Pillow. Install with: pip install -e ".[screenshot]"'),
+        ):
+            res = default_executor().run([{"name": "screenshot"}])
         self.assertEqual(res[0].status, "error")
-        self.assertIn("not wired", res[0].error)
+        self.assertIn("mss", res[0].error)
+
+    def test_default_screenshot_returns_path_metadata(self):
+        from unittest.mock import patch
+
+        fake = {"path": "C:/tmp/shot.png", "width": 10, "height": 20}
+        with patch("desktop_ai_agent.action.handlers.capture_screen", return_value=fake):
+            res = default_executor().run([{"name": "screenshot"}])
+        self.assertTrue(res[0].ok)
+        self.assertEqual(res[0].output, fake)
 
     def test_wait_limit_enforced(self):
         res = default_executor().run([{"name": "wait", "arguments": {"seconds": 999}}])
