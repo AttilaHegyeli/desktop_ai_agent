@@ -137,6 +137,112 @@ class TestLoop(unittest.TestCase):
         run_task(client, ex, "what is this", images=["B64"])
         self.assertEqual(client.user, [("what is this", ["B64"])])
 
+    def test_successful_screenshot_attaches_image_for_next_turn(self):
+        import base64
+        import tempfile
+        from pathlib import Path
+
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "shot.png"
+            path.write_bytes(png)
+            reg = ActionRegistry([ActionSpec("screenshot", "capture", Risk.LOW)])
+            handlers = {
+                "screenshot": lambda a: {"path": str(path), "width": 1, "height": 1},
+            }
+            ex = Executor(reg, handlers)
+            client = FakeClient([
+                tool_turn(call("screenshot")),
+                ChatTurn(content="I see a pixel"),
+            ])
+            res = run_task(client, ex, "look", auto_screenshot=False)
+        self.assertEqual(res.status, "done")
+        self.assertEqual(client.user[0], ("look", None))
+        self.assertEqual(client.user[1][0], "Screenshot attached.")
+        self.assertEqual(len(client.user[1][1]), 1)
+        self.assertEqual(base64.b64decode(client.user[1][1][0]), png)
+
+    def test_auto_screenshot_when_user_asks_what_is_on_screen(self):
+        import base64
+        import tempfile
+        from pathlib import Path
+
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "shot.png"
+            path.write_bytes(png)
+            reg = ActionRegistry([ActionSpec("screenshot", "capture", Risk.LOW)])
+            handlers = {
+                "screenshot": lambda a: {"path": str(path), "width": 1, "height": 1},
+            }
+            ex = Executor(reg, handlers)
+            client = FakeClient([ChatTurn(content="I see the screen")])
+            events = []
+            res = run_task(
+                client, ex, "what do you see on my screen?",
+                on_event=lambda k, d: events.append(k),
+            )
+        self.assertEqual(res.status, "done")
+        self.assertEqual(client.user[0][0], "what do you see on my screen?")
+        self.assertEqual(base64.b64decode(client.user[0][1][0]), png)
+        self.assertIn("screenshot", events)
+
+    def test_no_auto_screenshot_for_plain_chat(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "shot.png"
+            path.write_bytes(b"x")
+            calls = []
+            reg = ActionRegistry([ActionSpec("screenshot", "capture", Risk.LOW)])
+            handlers = {
+                "screenshot": lambda a: calls.append(1) or {"path": str(path), "width": 1, "height": 1},
+            }
+            ex = Executor(reg, handlers)
+            client = FakeClient([ChatTurn(content="Hello!")])
+            res = run_task(client, ex, "hi there")
+        self.assertEqual(res.status, "done")
+        self.assertEqual(calls, [])
+        self.assertEqual(client.user, [("hi there", None)])
+
+    def test_auto_screenshot_refreshes_after_other_tools_only_for_vision_tasks(self):
+        import base64
+        import tempfile
+        from pathlib import Path
+
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "shot.png"
+            path.write_bytes(png)
+            reg = ActionRegistry([
+                ActionSpec("wait", "pause", Risk.LOW, (
+                    Param("seconds", "number", "s", minimum=0, maximum=30),
+                )),
+                ActionSpec("screenshot", "capture", Risk.LOW),
+            ])
+            handlers = {
+                "wait": lambda a: {"waited_seconds": a["seconds"]},
+                "screenshot": lambda a: {"path": str(path), "width": 1, "height": 1},
+            }
+            ex = Executor(reg, handlers)
+            client = FakeClient([
+                tool_turn(call("wait", seconds=0)),
+                ChatTurn(content="refreshed"),
+            ])
+            res = run_task(client, ex, "look at my screen after a wait")
+        self.assertEqual(res.status, "done")
+        self.assertEqual(client.user[0][0], "look at my screen after a wait")
+        self.assertIsNotNone(client.user[0][1])
+        self.assertEqual(client.user[1][0], "Current screen.")
+        self.assertEqual(base64.b64decode(client.user[1][1][0]), png)
+
 
 if __name__ == "__main__":
     unittest.main()

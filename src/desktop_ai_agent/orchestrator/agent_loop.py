@@ -12,13 +12,39 @@ Stop conditions (so a confused model can't loop forever and burn tokens):
 """
 from __future__ import annotations
 
+import base64
 import json
+import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from desktop_ai_agent.action.executor import Executor, StepResult, plan_from_tool_calls
 
 EventFn = Callable[[str, Any], None]
+
+# User phrasing that usually means "look at my screen" (EN + HU). Used only to decide
+# whether to auto-capture; the screenshot tool still works for any other case.
+_VISION_RE = re.compile(
+    r"""
+    \b(
+        screenshot | screen\s*shot | screenshotol |
+        what\s+(do\s+you\s+)?see |
+        (look|looking)\s+(at\s+)?(my\s+)?(screen|desktop|monitor|display) |
+        (on|at)\s+(my\s+)?(screen|desktop|monitor|display|computer) |
+        (describe|read|check)\s+(the\s+|my\s+)?(screen|desktop|window) |
+        current\s+(screen|desktop|window)
+    )\b
+    |
+    \b(see|seeing)\s+(on|what).{0,40}\b(screen|desktop|monitor|computer|display)\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def needs_screen_vision(text: str) -> bool:
+    """True when the user message likely requires seeing the desktop."""
+    return bool(text and _VISION_RE.search(text))
 
 
 @dataclass
@@ -38,18 +64,67 @@ def _skipped_message(name: str) -> str:
     )
 
 
+def _png_b64(path: str | Path) -> str:
+    return base64.b64encode(Path(path).read_bytes()).decode("ascii")
+
+
+def _attach_screenshot_images(client: Any, results: list[StepResult]) -> None:
+    """After an explicit screenshot tool call, feed the PNG as a multimodal user message.
+
+    Tool results stay text-only (path/size). Ollama vision expects images on user messages.
+    """
+    for r in results:
+        if not r.ok or r.name != "screenshot" or not isinstance(r.output, dict):
+            continue
+        path = r.output.get("path")
+        if not path:
+            continue
+        client.add_user("Screenshot attached.", images=[_png_b64(path)])
+
+
+def _capture_b64(executor: Executor, emit: EventFn) -> str | None:
+    """Run the screenshot action and return base64 PNG, or None on failure."""
+    if "screenshot" not in executor.registry:
+        return None
+    results = executor.run([{"name": "screenshot", "arguments": {}}])
+    if not results:
+        return None
+    r = results[0]
+    emit("result", r)
+    if not r.ok or not isinstance(r.output, dict):
+        return None
+    path = r.output.get("path")
+    if not path:
+        return None
+    try:
+        return _png_b64(path)
+    except OSError:
+        return None
+
+
 def run_task(
     client: Any,  # core.chat_client.ChatClient (anything with add_user/chat/add_tool_result)
     executor: Executor,
     user_text: str,
     *,
     images: list[str] | None = None,
+    auto_screenshot: bool = True,
     max_rounds: int = 8,
     max_failed_rounds: int = 2,
     on_event: EventFn | None = None,
 ) -> TaskResult:
     emit: EventFn = on_event or (lambda kind, data: None)
-    client.add_user(user_text, images)
+    attach = list(images) if images else []
+    # Auto-capture only when this request needs screen vision (not on every hello/script).
+    vision = bool(attach) or (auto_screenshot and needs_screen_vision(user_text))
+    if vision and auto_screenshot and not attach:
+        b64 = _capture_b64(executor, emit)
+        if b64:
+            attach = [b64]
+            emit("screenshot", "auto")
+        else:
+            vision = False
+    client.add_user(user_text, attach or None)
     tools = executor.registry.to_tools()  # what the model sees == what we enforce
     failed_rounds = 0
     last_errors = ""
@@ -73,6 +148,11 @@ def run_task(
             if r:
                 emit("result", r)
 
+        had_screenshot = any(r.ok and r.name == "screenshot" for r in results)
+        if had_screenshot:
+            vision = True
+        _attach_screenshot_images(client, results)
+
         if any(r.status == "declined" for r in results):
             return TaskResult("declined", "A step needed your approval and was not approved.", round_no)
 
@@ -85,6 +165,13 @@ def run_task(
                 emit("final", text)
                 return TaskResult("done", text, round_no)
             failed_rounds = 0
+            # Mid-task refresh only while this task is already using vision, and the
+            # plan did not just capture (image already attached above).
+            if auto_screenshot and vision and not had_screenshot:
+                b64 = _capture_b64(executor, emit)
+                if b64:
+                    client.add_user("Current screen.", images=[b64])
+                    emit("screenshot", "auto")
             continue
 
         failed_rounds += 1

@@ -29,6 +29,9 @@ class TestFormatEvent(unittest.TestCase):
         self.assertEqual(format_event("final", "All done"), "All done\n")
         self.assertEqual(format_event("mystery", None), "")
 
+    def test_auto_screenshot_line(self):
+        self.assertEqual(format_event("screenshot", "auto"), "[screenshot] auto\n")
+
 
 if __name__ == "__main__":
     unittest.main()

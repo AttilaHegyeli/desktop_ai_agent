@@ -11,15 +11,16 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from desktop_ai_agent.action.tools.screenshot import capture_screen
+
 
 def wait(args: dict[str, Any]) -> dict[str, Any]:
     time.sleep(args["seconds"])
     return {"waited_seconds": args["seconds"]}
 
 
-def screenshot(args: dict[str, Any]) -> Any:
-    # TODO: call the capture function that will live in input/ (not built yet).
-    raise NotImplementedError("screenshot is not wired to input/ capture yet")
+def screenshot(args: dict[str, Any]) -> dict[str, Any]:
+    return capture_screen()
 
 
 def provide_script(args: dict[str, Any]) -> dict[str, str]:

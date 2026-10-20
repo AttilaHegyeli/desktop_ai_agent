@@ -26,7 +26,7 @@ Continuous Whisper listening uses CPU; the HF “unauthenticated requests” lin
 
 ## Current actions
 - `wait(seconds)`: low risk, 0 to 30 seconds.
-- `screenshot`: low risk, **not wired yet** (returns an error).
+- `screenshot`: low risk; captures the full screen to `logs/screenshots/` and attaches the image for the next model turn. Needs `pip install -e ".[screenshot]"`. **Auto-capture** runs only when the user message looks like it needs screen vision (e.g. “what do you see?”, “look at my screen”); greetings and script requests do not trigger it. Mid-task refresh happens only while that vision task is active.
 - `provide_script(script, code)`: low risk, display only, ends the turn.
 
 ## Safety rules
@@ -43,7 +43,7 @@ Continuous Whisper listening uses CPU; the HF “unauthenticated requests” lin
 The executor refuses to start if the registry and handlers do not match.
 
 ## Logs
-`logs/audit.jsonl` (relative to the folder the app is started from). One JSON line per event: `rejected`, `declined`, `execute`, `result`, with timestamp, action, risk and arguments.
+`logs/` is gitignored. `logs/audit.jsonl` (relative to the folder the app is started from): one JSON line per event (`rejected`, `declined`, `execute`, `result`). Screenshots go under `logs/screenshots/` as timestamped PNGs.
 
 ## Run and test
 - Start: `scripts/start.bat`
@@ -51,7 +51,7 @@ The executor refuses to start if the registry and handlers do not match.
 
 ## Known limitations
 - Small local model (gemma4 E4B). It may occasionally pick the wrong action. Check the audit log.
-- No screen access or mouse/keyboard actions yet.
+- No mouse/keyboard actions yet.
 - Wake word uses rolling Whisper checks (not a dedicated wake engine); mishears are possible. No TTS / output speech yet.
 - Results go back to the model after every action (optimization planned).
 - The `gemma4-agent` profile is still created at startup but is no longer used for chatting.
