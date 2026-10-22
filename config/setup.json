@@ -1,0 +1,74 @@
+{
+  "ollama": {
+    "base_model": "gemma4",
+    "agent_model": "gemma4-agent",
+    "host": "http://127.0.0.1:11434",
+    "startup_timeout_sec": 60,
+    "interactive_commands": [
+      "/set nothink",
+      "/set format json"
+    ]
+  },
+  "program_files_index": {
+    "enabled": true,
+    "resolve_exe": true,
+    "drives": ["C", "D", "E"]
+  },
+  "formats": {
+    "response_schema": {
+      "script": "snake_case job id for Action layer logs/routing",
+      "code": "python source Action will exec unchanged"
+    }
+  },
+  "ui": {
+    "title": "Desktop AI Agent — Ollama Setup",
+    "width": 820,
+    "height": 640,
+    "auto_open": true
+  },
+  "voice": {
+    "enabled": true,
+    "model_size": "base",
+    "language": "en",
+    "sample_rate": 16000,
+    "device": "cpu",
+    "compute_type": "int8",
+    "wake_word": {
+      "enabled": true,
+      "phrases": [
+        "Zsuzsi",
+        "hi",
+        "Hey",
+        "hey",
+        "hey zsuzsi",
+        "hey susie",
+        "hey sushi",
+        "hey sooshi",
+        "hey suzy",
+        "hey suzie"
+      ],
+      "silence_sec": 3.0,
+      "post_wake_grace_sec": 5.0,
+      "max_utterance_sec": 30,
+      "chunk_sec": 0.8,
+      "energy_threshold": 0.005,
+      "stop_phrases": [
+        "stop",
+        "sleep",
+        "go to sleep",
+        "that's all",
+        "goodbye"
+      ]
+    }
+  },
+  "output": {
+    "tts": {
+      "enabled": true,
+      "engine": "edge",
+      "voice": "en-US-JennyNeural",
+      "rate": "+0%",
+      "volume": 1.0,
+      "wake_ack": "yes my lord?"
+    }
+  }
+}
