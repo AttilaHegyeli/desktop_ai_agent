@@ -7,7 +7,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Or without editable install:
+Without editable install:
 
 ```powershell
 pip install pytest
@@ -20,11 +20,16 @@ pytest
 ```text
 tests/
   conftest.py
-  core/
-  action/
-  orchestrator/
-  ui/
+  core/           # chat client, folder index, response format
+  action/         # registry, executor, handlers, screenshot, open_app
+  orchestrator/   # agent loop, prompts, service, vision heuristics
+  ui/             # event formatting
   input/          # voice STT (mocked; no mic / model download)
+  output/         # TTS helpers
 ```
 
-Tests are stdlib + pytest only (voice unit tests mock faster-whisper / sounddevice). Program Files indexing uses a fake directory tree under `tmp_path` so CI does not need real `C:\Program Files`. Install voice runtime deps with `pip install -e ".[voice]"` when using the Mic button.
+## Notes
+
+- Tests use **stdlib + pytest**. Voice unit tests mock faster-whisper / sounddevice.
+- Program Files indexing uses a fake tree under `tmp_path` — CI does not need a real `C:\Program Files`.
+- Install `[voice]` / `[screenshot]` / `[tts]` only when you exercise those features in the real app, not for the default unit suite.

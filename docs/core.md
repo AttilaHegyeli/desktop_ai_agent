@@ -1,60 +1,51 @@
-# Core AI — Current Implementation
+# Core AI
 
-Status: **Core is implemented**. Input / Orchestrator / Action Layer from the full architecture are not wired yet. The UI chat is a stand-in for Orchestrator input.
+Core is the **local brain**: Ollama + Gemma 4. It does not touch the OS. It talks to the orchestrator (messages + tools) and relies on the action layer for side effects.
 
-Pipeline today:
+## Role in the live pipeline
 
 ```text
-python -m app
-  → LauncherApp (tkinter)
-  → SessionSetup.prepare()
-       1. Index Program Files (C/D/E)
-       2. Ensure Ollama + pull gemma4
-       3. Build gemma4-agent from Modelfile
-       4. /set nothink + format json
-       5. ChatClient ready
-  → User types a task
-  → Ollama gemma4-agent returns JSON
-  → normalize_agent_reply()
-  → UI prints {"script","code"}
-  → (Action Layer not built — code is not executed yet)
+UI / voice
+  → AgentService / agent_loop
+       → ChatClient (Ollama, gemma4) + tools from registry
+       → Executor (action layer)
+       → results back to the model
 ```
 
-## Role of Core
+Startup (`SessionSetup.prepare()`):
 
-Core is a **scriptwriter for a machine Action Layer**, not a chat assistant.
+1. Index Program Files (drives from config).
+2. Ensure Ollama is up; pull `gemma4` if missing.
+3. Optionally build `gemma4-agent` from the Modelfile (legacy profile; chat uses base model + in-code system prompt).
+4. Hand a ready `ChatClient` to the UI / orchestrator.
 
-| Field | Meaning |
-|-------|---------|
-| `script` | Snake_case job id for logs/routing (`open_vs_code`) |
-| `code` | Windows Python source Action will `exec` unchanged |
+## Models
 
-Contract (see `config/Modelfile.gemma4-agent` and `response_format.agent_system_prompt()`):
+| Config key | Default | Use |
+|------------|---------|-----|
+| `ollama.base_model` | `gemma4` | Active chat + tool calling |
+| `ollama.agent_model` | `gemma4-agent` | Built at setup; not used for the live tool loop |
+| `ollama.host` | `http://127.0.0.1:11434` | Ollama API |
 
-1. Parse the task.
-2. If an app/path is needed, prefer `resolve_path` from the Program Files index.
-3. Emit the smallest working Windows Python.
-4. Stdlib / project tools allowed.
-5. No try/except, no raise, no secrets, no placeholders, no markdown, no prose.
-6. No comments or notes. Windows-only APIs/paths.
+System instructions for the agent live in `orchestrator/prompts.py` (no model rebuild when you edit them). Tool definitions always come from the action registry.
 
 ## Program Files index
 
 Module: `desktop_ai_agent.core.folder_index`
 
-On setup start, scans only:
+On setup, scans:
 
 - `X:\Program Files`
 - `X:\Program Files (x86)`
 
-for drives `C`, `D`, `E` (configurable in `config/setup.json` → `program_files_index`).
+for drives listed in `program_files_index.drives` (default `C`, `D`, `E`).
 
 Writes:
 
 - `config/program_files_index.json`
 - `config/program_files_index.txt` (lines like `steam, (C:\...\steam.exe)`)
 
-Agent-facing API (never raises; empty string / `[]` on miss):
+Agent-facing helpers (never raise; empty / `[]` on miss):
 
 ```python
 from desktop_ai_agent.core.folder_index import resolve_path, search_programs, list_programs
@@ -64,29 +55,32 @@ search_programs("git")      # top matches [{name, path}, ...]
 list_programs()             # full catalog
 ```
 
-## Response normalization
+`open_app` in the action layer uses this catalog so the model never invents executable paths.
 
-Module: `desktop_ai_agent.core.response_format`
+## Chat client
 
-- Enforces JSON object with `script` + `code`
-- Replaces filler job ids (`short`, `task`, …) using `title_from_user(task)`
-- Strips markdown fences when present
+`core/chat_client.py` wraps Ollama chat (including multimodal image attachments after screenshots).
 
-## Config
+`core/response_format.py` still helps normalize legacy `{script, code}` JSON when needed; the primary path today is **native tool calls**, not free-form script JSON.
 
-| File | Purpose |
-|------|---------|
-| `config/setup.json` | Ollama host/models, index drives, UI |
-| `config/Modelfile.gemma4-agent` | Agent system prompt + Ollama params |
+## Related modules
 
-## Manual smoke tasks
+| Module | Job |
+|--------|-----|
+| `core/session_setup.py` | First-run prepare |
+| `core/ollama_service.py` | Start / wait for Ollama |
+| `core/modelfile.py` | Build custom Ollama models |
+| `core/config_loader.py` | Load `config/setup.json` |
+| `core/folder_index/` | Scan + search catalog |
 
-**Easy:** `print hello` · `open youtube` · `get budapest weather`  
-**Medium:** `run vscode` · `open steam` · `create a file on desktop named test.txt with hi`  
-**Hard:** `find git and print its path` · `list all indexed programs that contain steam or docker`
+## Smoke ideas (manual)
 
-## Next (not done)
+**Easy:** `print hello` · greetings · `wait 1 second`  
+**Medium:** `open steam` · `open vs code` · `what do you see on my screen?`  
+**Hard:** ask for something with no tool → accept a script → confirm it is shown only  
 
-- Action Layer: parse JSON → `exec(code)` → return stdout/stderr to Core on failure
-- Orchestrator: replace raw UI text with a structured task packet
-- Input: voice / vision / gestures
+## See also
+
+- [Action layer](action.md)  
+- [Configuration](configuration.md)  
+- [Demo & usage](demo.md)  
