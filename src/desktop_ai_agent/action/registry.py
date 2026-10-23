@@ -184,7 +184,7 @@ def build_default_registry() -> ActionRegistry:
                 name="open_app",
                 description=(
                     "Open an installed Windows application by name, for example 'steam' or "
-                    "'vs code'. Only programs found in the program index can be opened."
+                    "'vs code'. Only programs found in the executable index can be opened."
                 ),
                 risk=Risk.MEDIUM,
                 params=(
