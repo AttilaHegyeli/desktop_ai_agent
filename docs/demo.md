@@ -9,13 +9,13 @@ pip install -e .
 python -m app
 ```
 
-Or `scripts\start.bat`. First run indexes Program Files, starts Ollama, and opens the UI.
+Or `scripts\start.bat`. First run indexes application `.exe` files, starts Ollama, and opens the UI.
 
 **Useful first prompts**
 
 | Try | What happens |
 |-----|----------------|
-| `open steam` / `open vs code` | `open_app` via the Program Files index |
+| `open steam` / `open vs code` | `open_app` via the executable index |
 | `wait 2 seconds` | `wait` |
 | `what do you see on my screen?` | Auto screenshot (needs `[screenshot]`) + vision reply |
 | `create a file on my desktop` | No matching tool → asks if you want a script |
