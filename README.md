@@ -17,7 +17,7 @@ text / voice  →  input  →  orchestrator  →  gemma4 (core)  →  action lay
 |------|-----------|
 | **Chat** | Always-on-top top-edge bar (hover to expand; last me/ai for 20s) |
 | **Voice in** | Mic push-to-talk + wake word (“hey Zsuzsi”) via faster-whisper |
-| **Core AI** | Ollama + `gemma4`, tool calling, Program Files index |
+| **Core AI** | Ollama + `gemma4`, tool calling, folder index (apps + files) |
 | **Actions** | `open_app`, `screenshot`, `wait`, `provide_script` (display only) |
 | **Voice out** | Optional TTS via edge-tts (or offline SAPI) |
 | **Safety** | Registry + executor gate; high-risk actions denied until confirm UI exists |
@@ -49,7 +49,7 @@ scripts\start.bat
 
 On first launch the UI will:
 
-1. Index `Program Files` on drives C/D/E  
+1. Index usable application `.exe` files on drives C/D/E 
 2. Start Ollama and pull `gemma4` if needed  
 3. Show the top-edge chat bar  
 
@@ -89,7 +89,7 @@ desktop_ai_agent/
 |-----|----------|
 | [Architecture](docs/architecture.md) | Pipeline layers and how data flows |
 | [Demo & usage](docs/demo.md) | How to use v0.1.0 day to day |
-| [Core AI](docs/core.md) | Ollama, models, Program Files index |
+| [Core AI](docs/core.md) | Ollama, models, folder index |
 | [Action layer](docs/action.md) | Tools, safety, how to add an action |
 | [Configuration](docs/configuration.md) | `setup.json` reference |
 | [Testing](docs/testing.md) | How to run tests |

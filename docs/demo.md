@@ -9,13 +9,13 @@ pip install -e .
 python -m app
 ```
 
-Or `scripts\start.bat`. First run indexes Program Files, starts Ollama, then shows an **always-on-top top-edge chat bar** (configuration window withdraws). Hover the sleep pill at the top to expand; after a reply only `me` / `ai` show, then the bar collapses after 20 seconds. Use **⚙** for Configuration, **✕** to close chat back to sleep mode, or right-click for the same actions / Exit app.
+Or `scripts\start.bat`. First run indexes application `.exe` files, starts Ollama, and opens the UI.
 
 **Useful first prompts**
 
 | Try | What happens |
 |-----|----------------|
-| `open steam` / `open vs code` | `open_app` via the Program Files index |
+| `open steam` / `open vs code` | `open_app` via the executable index |
 | `wait 2 seconds` | `wait` |
 | `what do you see on my screen?` | Auto screenshot (needs `[screenshot]`) + vision reply |
 | `create a file on my desktop` | No matching tool → asks if you want a script |

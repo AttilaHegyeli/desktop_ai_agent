@@ -14,7 +14,7 @@ UI / voice
 
 Startup (`SessionSetup.prepare()`):
 
-1. Index Program Files (drives from config).
+1. Index usable application `.exe` files (drives from config).
 2. Ensure Ollama is up; pull `gemma4` if missing.
 3. Optionally build `gemma4-agent` from the Modelfile (legacy profile; chat uses base model + in-code system prompt).
 4. Hand a ready `ChatClient` to the UI / orchestrator.
@@ -29,33 +29,40 @@ Startup (`SessionSetup.prepare()`):
 
 System instructions for the agent live in `orchestrator/prompts.py` (no model rebuild when you edit them). Tool definitions always come from the action registry.
 
-## Program Files index
+## Folder index
 
 Module: `desktop_ai_agent.core.folder_index`
 
-On setup, scans:
+On setup (config key `folder_index`, legacy `program_files_index` still read), indexes **usable application `.exe` files** (deduped by absolute path):
 
-- `X:\Program Files`
-- `X:\Program Files (x86)`
+- Start Menu / Startup `.lnk` targets (in-process `.lnk` parse; keeps `link` + exe `path`)
+- Windows Settings → Apps (Uninstall registry DisplayName / icon / install dir)
+- Store / AppX apps via Shell:AppsFolder (`aumid` launch id)
+- `X:\Program Files` / `Program Files (x86)` (primary per product; vendor umbrellas expand)
+- `Games` / `games` folders (drive root and under `Users\*`)
+- optional `apps.extra_roots`
 
-for drives listed in `program_files_index.drives` (default `C`, `D`, `E`).
+Entries are keyed by launch target (path or AUMID); extra names become `aliases`.
+
+Skips uninstallers, setup helpers, crash reporters, and redistributables.
+
+`.lnk` targets are resolved in-process (MS-SHLLINK binary parse — no PowerShell per shortcut). AppX apps launch via `shell:AppsFolder\<AUMID>`.
 
 Writes:
 
-- `config/program_files_index.json`
-- `config/program_files_index.txt` (lines like `steam, (C:\...\steam.exe)`)
+- `config/program_files_index.json` / `.txt`
 
 Agent-facing helpers (never raise; empty / `[]` on miss):
 
 ```python
 from desktop_ai_agent.core.folder_index import resolve_path, search_programs, list_programs
 
-resolve_path("steam")       # path or ""
-search_programs("git")      # top matches [{name, path}, ...]
+resolve_path("steam")       # exe path or ""
+search_programs("git")      # top exe matches
 list_programs()             # full catalog
 ```
 
-`open_app` in the action layer uses this catalog so the model never invents executable paths.
+`open_app` uses this catalog so the model never invents executable paths.
 
 ## Chat client
 

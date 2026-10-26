@@ -63,7 +63,9 @@ class TestMatching(TempExeCase):
     def test_several_plausible_matches_ask_instead_of_guessing(self):
         a, b = self.exe("notepad_plus.exe"), self.exe("notepad_x.exe")
         self.index([{"name": "notepad_plus", "path": a}, {"name": "notepad_x", "path": b}])
-        with self.assertRaisesRegex(ValueError, "Several programs match.*notepad_plus.*notepad_x.*Ask the user"):
+        with self.assertRaisesRegex(
+            ValueError, "Several programs match.*notepad_plus.*notepad_x.*Ask the user"
+        ):
             handlers.open_app({"name": "notepad"})
         self.assertEqual(self.launched, [])
 
@@ -218,6 +220,18 @@ class TestWithTheRealFolderIndex(TempExeCase):
         self.use_catalog([self.entry("steam", self.exe("steam.exe"))])
         with self.assertRaises(LookupError):
             handlers.open_app({"name": "zzz_not_installed"})
+
+    def test_similar_filename_opens_without_exact_key_match(self):
+        compass = self.exe("MongoDBCompass.exe")
+        self.use_catalog(
+            [
+                self.entry("mongod", self.exe("mongod.exe"), "mongod"),
+                self.entry("mongodbcompass", compass, "MongoDBCompass"),
+            ]
+        )
+        result = handlers.open_app({"name": "MongoDB Compass"})
+        self.assertEqual(self.launched, [compass])
+        self.assertEqual(result["opened"], "mongodbcompass")
 
 
 if __name__ == "__main__":

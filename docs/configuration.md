@@ -14,18 +14,26 @@ Main file: [`config/setup.json`](../config/setup.json).
 
 Related: `config/Modelfile.gemma4-agent` — older scriptwriter profile. Live agent instructions are in `src/desktop_ai_agent/orchestrator/prompts.py`.
 
-## `program_files_index`
+## `folder_index`
+
+(Legacy key `program_files_index` is still accepted if `folder_index` is absent.)
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `enabled` | `true` | Run index on setup |
-| `resolve_exe` | `true` | Prefer `.exe` paths in the catalog |
+| `enabled` | `true` | Run indexing on setup |
 | `drives` | `["C","D","E"]` | Drive letters to scan |
+| `apps.enabled` | `true` | Index usable `.exe` launchers |
+| `apps.include_start_menu` | `true` | Resolve Start Menu / Startup `.lnk` targets (stores `link` + exe `path`) |
+| `apps.include_installed_apps` | `true` | Windows Settings → Apps (Uninstall registry) |
+| `apps.include_appx` | `true` | Store / AppX apps via Shell:AppsFolder (AUMID) |
+| `apps.include_games_folders` | `true` | Scan `Games` / `games` trees |
+| `apps.extra_roots` | `[]` | Extra folders to scan for `.exe` |
+| `apps.max_exe_depth` | `4` | Max depth under each app/games root |
+| `apps.max_exes` | `20000` | Safety cap |
 
-Output files (generated):
+Output files (generated; gitignored):
 
-- `config/program_files_index.json`
-- `config/program_files_index.txt`
+- `config/program_files_index.json` / `.txt`
 
 ## `ui`
 
