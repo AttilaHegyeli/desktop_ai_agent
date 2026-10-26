@@ -192,6 +192,40 @@ def build_default_registry() -> ActionRegistry:
                 ),
             ),
             ActionSpec(
+                name="web_search",
+                description=(
+                    "Search the web and return short result snippets. Use this to answer "
+                    "questions that need current facts (weather, news, definitions). "
+                    "After results return, answer the user in plain text from those snippets. "
+                    "Do not use this when the user only wants a page or site opened."
+                ),
+                risk=Risk.LOW,
+                params=(
+                    Param("query", "string", "Search query", max_length=200),
+                    Param(
+                        "max_results",
+                        "integer",
+                        "How many results to return (default 3)",
+                        required=False,
+                        minimum=1,
+                        maximum=5,
+                    ),
+                ),
+            ),
+            ActionSpec(
+                name="web_open",
+                description=(
+                    "Open an http or https URL in the user's default browser. Use when the "
+                    "user wants to go to a site, open GitHub/YouTube/a link, or play something "
+                    "via a web page. Build a sensible https URL. For answering questions with "
+                    "facts, prefer web_search instead."
+                ),
+                risk=Risk.MEDIUM,
+                params=(
+                    Param("url", "string", "Full http or https URL to open", max_length=2000),
+                ),
+            ),
+            ActionSpec(
                 name="provide_script",
                 description=(
                     "Show the user a Python script as JSON in the chat. Use it only after "

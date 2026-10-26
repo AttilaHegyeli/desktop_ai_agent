@@ -51,7 +51,7 @@ See [core.md](core.md).
 
 - **Registry:** names, parameters, risk levels (source of truth).
 - **Executor:** validates args, enforces risk, logs, then runs.
-- **Handlers:** do the work (`open_app`, `screenshot`, `wait`, `provide_script`).
+- **Handlers:** do the work (`open_app`, `screenshot`, `wait`, `web_search`, `web_open`, `provide_script`).
 
 See [action.md](action.md).
 
@@ -67,6 +67,7 @@ See [action.md](action.md).
 | Chat + voice STT | Camera / gesture input |
 | Tool calling + gated actions | Mouse / keyboard automation |
 | Screenshot for screen Q&A | Richer vision pipeline |
+| `web_search` + `web_open` | Full browser automation (click / type / forms) |
 | Display-only scripts | Confirmed high-risk actions + safer code runner |
 
 ## Code map

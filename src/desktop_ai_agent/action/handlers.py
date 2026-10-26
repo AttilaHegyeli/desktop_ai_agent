@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from desktop_ai_agent.action.tools.screenshot import capture_screen
+from desktop_ai_agent.action.tools.web_open import open_url as _open_url
+from desktop_ai_agent.action.tools.web_search import search_web as _search_web
 
 
 def wait(args: dict[str, Any]) -> dict[str, Any]:
@@ -29,6 +31,17 @@ def screenshot(args: dict[str, Any]) -> dict[str, Any]:
 def provide_script(args: dict[str, Any]) -> dict[str, str]:
     """Display-only: hands the script back as data. It is NEVER executed."""
     return {"script": args["script"], "code": args["code"]}
+
+
+def web_search(args: dict[str, Any]) -> dict[str, Any]:
+    """Fetch web snippets for the model to answer from. Does not open a browser."""
+    max_results = args.get("max_results", 3)
+    return _search_web(args["query"], max_results=max_results)
+
+
+def web_open(args: dict[str, Any]) -> dict[str, Any]:
+    """Open an http(s) URL in the user's default browser."""
+    return _open_url(args["url"])
 
 
 # ---- open_app ----------------------------------------------------------------
@@ -134,4 +147,6 @@ HANDLERS = {
     "wait": wait,
     "provide_script": provide_script,
     "open_app": open_app,
+    "web_search": web_search,
+    "web_open": web_open,
 }

@@ -5,22 +5,28 @@ from desktop_ai_agent.core.chat_client import ChatClient
 from desktop_ai_agent.orchestrator.prompts import SYSTEM_PROMPT
 
 
+# Tools named in the prompt for routing; everything else comes from the registry only.
+_NAMED_IN_PROMPT = frozenset({"provide_script", "web_search", "web_open"})
+
+
 class TestSystemPrompt(unittest.TestCase):
     def test_tool_named_in_prompt_really_exists(self):
-        self.assertIn("provide_script", SYSTEM_PROMPT)
-        self.assertIn("provide_script", build_default_registry().names())
+        names = build_default_registry().names()
+        for name in _NAMED_IN_PROMPT:
+            self.assertIn(name, SYSTEM_PROMPT)
+            self.assertIn(name, names)
 
     def test_contains_the_offer_question(self):
         self.assertIn("Do you want a script for it?", SYSTEM_PROMPT)
 
     def test_has_the_numbered_rules(self):
-        for n in range(1, 10):
+        for n in range(1, 14):
             self.assertIn(f"\n{n}. ", SYSTEM_PROMPT)
 
     def test_prompt_does_not_duplicate_the_tool_list(self):
-        # Only provide_script is referenced by name; other actions come from the registry.
+        # Only routing-critical tools are referenced by name.
         for name in build_default_registry().names():
-            if name != "provide_script":
+            if name not in _NAMED_IN_PROMPT:
                 self.assertNotIn(name, SYSTEM_PROMPT)
 
     def test_chat_client_sends_it_first_and_keeps_it_after_clear(self):
