@@ -31,9 +31,13 @@ Output files (generated):
 
 | Key | Meaning |
 |-----|---------|
-| `title` | Window title |
-| `width` / `height` | Window size |
-| `auto_open` | Open UI on start |
+| `title` | Setup window title |
+| `width` / `height` | Setup window size |
+| `auto_open` | Run setup automatically on start |
+| `bar_width` | Top-edge chat bar width (px) |
+| `bar_auto_hide_ms` | After a reply, collapse the bar after this many ms (default 20000) |
+| `bar_collapsed_height` | Height of the idle sleep pill at the top edge |
+| `bar_top_margin` | Gap from the top of the screen (px; default 10) |
 
 ## `voice` (needs `pip install -e ".[voice]"`)
 

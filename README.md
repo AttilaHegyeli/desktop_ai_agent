@@ -15,7 +15,7 @@ text / voice  →  input  →  orchestrator  →  gemma4 (core)  →  action lay
 
 | Area | In v0.1.0 |
 |------|-----------|
-| **Chat** | Type tasks in the setup UI terminal |
+| **Chat** | Always-on-top top-edge bar (hover to expand; last me/ai for 20s) |
 | **Voice in** | Mic push-to-talk + wake word (“hey Zsuzsi”) via faster-whisper |
 | **Core AI** | Ollama + `gemma4`, tool calling, Program Files index |
 | **Actions** | `open_app`, `screenshot`, `wait`, `provide_script` (display only) |
@@ -51,9 +51,9 @@ On first launch the UI will:
 
 1. Index `Program Files` on drives C/D/E  
 2. Start Ollama and pull `gemma4` if needed  
-3. Open the chat terminal  
+3. Show the top-edge chat bar  
 
-Then type something like `open steam` or `what do you see on my screen?`.
+Hover the nub at the top of the screen, then type something like `open steam` or `what do you see on my screen?`.
 
 ### Optional extras
 

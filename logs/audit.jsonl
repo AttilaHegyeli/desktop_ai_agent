@@ -6,3 +6,7 @@
 {"ts": "2026-10-19T13:42:41", "event": "result", "step": 0, "action": "open_app", "status": "error", "error": "ValueError: Found visual_studio for 'visual_studio', but none has a launchable .exe in the index."}
 {"ts": "2026-10-19T13:43:13", "event": "execute", "step": 0, "action": "open_app", "risk": "medium", "args": {"name": "windirstat"}}
 {"ts": "2026-10-19T13:43:13", "event": "result", "step": 0, "action": "open_app", "status": "executed", "output": {"opened": "windirstat", "path": "C:\\Program Files\\WinDirStat\\WinDirStat.exe"}}
+{"ts": "2026-10-26T12:14:24", "event": "execute", "step": 0, "action": "open_app", "risk": "medium", "args": {"name": "vs code"}}
+{"ts": "2026-10-26T12:14:24", "event": "result", "step": 0, "action": "open_app", "status": "error", "error": "LookupError: No installed program matches 'vs code'."}
+{"ts": "2026-10-26T12:26:53", "event": "execute", "step": 0, "action": "open_app", "risk": "medium", "args": {"name": "V is good"}}
+{"ts": "2026-10-26T12:26:53", "event": "result", "step": 0, "action": "open_app", "status": "error", "error": "LookupError: No installed program matches 'V is good'."}

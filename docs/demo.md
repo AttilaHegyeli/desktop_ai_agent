@@ -9,7 +9,7 @@ pip install -e .
 python -m app
 ```
 
-Or `scripts\start.bat`. First run indexes Program Files, starts Ollama, and opens the UI.
+Or `scripts\start.bat`. First run indexes Program Files, starts Ollama, then shows an **always-on-top top-edge chat bar** (configuration window withdraws). Hover the sleep pill at the top to expand; after a reply only `me` / `ai` show, then the bar collapses after 20 seconds. Use **⚙** for Configuration, **✕** to close chat back to sleep mode, or right-click for the same actions / Exit app.
 
 **Useful first prompts**
 
@@ -25,7 +25,7 @@ Or `scripts\start.bat`. First run indexes Program Files, starts Ollama, and open
 
 ### Typed chat
 
-Type in the terminal and submit. Always available; no extra packages.
+Hover the top-edge bar, type in the input field, press Enter or ▶. Always available; no extra packages.
 
 ### Mic (push-to-talk)
 
