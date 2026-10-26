@@ -2,7 +2,7 @@
 
 **Demo v0.1.0** — a local multimodal desktop assistant.
 
-You talk or type. A local **Gemma 4** model (via [Ollama](https://ollama.com)) decides what to do. A gated **action layer** runs only approved tools (open apps, screenshot, wait, or show a script). Replies come back as text and optional speech.
+You talk or type. A local **Gemma 4** model (via [Ollama](https://ollama.com)) decides what to do. A gated **action layer** runs only approved tools (open apps, web search/open, screenshot, wait, or show a script). Replies come back as text and optional speech.
 
 ```text
 text / voice  →  input  →  orchestrator  →  gemma4 (core)  →  action layer  →  chat / voice
@@ -18,11 +18,11 @@ text / voice  →  input  →  orchestrator  →  gemma4 (core)  →  action lay
 | **Chat** | Always-on-top top-edge bar (hover to expand; last me/ai for 20s) |
 | **Voice in** | Mic push-to-talk + wake word (“hey Zsuzsi”) via faster-whisper |
 | **Core AI** | Ollama + `gemma4`, tool calling, folder index (apps + files) |
-| **Actions** | `open_app`, `screenshot`, `wait`, `provide_script` (display only) |
+| **Actions** | `open_app`, `web_search`, `web_open`, `screenshot`, `wait`, `provide_script` (display only) |
 | **Voice out** | Optional TTS via edge-tts (or offline SAPI) |
 | **Safety** | Registry + executor gate; high-risk actions denied until confirm UI exists |
 
-Not in this demo yet: mouse/keyboard control, camera gestures, free `exec` of model code.
+Not in this demo yet: mouse/keyboard control, full browser automation, camera gestures, free `exec` of model code.
 
 ## Quick start
 

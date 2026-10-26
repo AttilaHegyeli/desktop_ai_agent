@@ -16,6 +16,8 @@ Or `scripts\start.bat`. First run indexes application `.exe` files, starts Ollam
 | Try | What happens |
 |-----|----------------|
 | `open steam` / `open vs code` | `open_app` via the executable index |
+| `what's the weather in Budapest?` | `web_search` → answer from snippets |
+| `open youtube and play lofi` / `open github.com` | `web_open` with an https URL |
 | `wait 2 seconds` | `wait` |
 | `what do you see on my screen?` | Auto screenshot (needs `[screenshot]`) + vision reply |
 | `create a file on my desktop` | No matching tool → asks if you want a script |

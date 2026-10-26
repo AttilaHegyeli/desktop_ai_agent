@@ -25,7 +25,11 @@ model tool calls → plan_from_tool_calls → Executor → handlers → results 
 | `wait(seconds)` | low | Pause 0–30 seconds |
 | `screenshot` | low | Full-screen PNG under `logs/screenshots/`; image attached for next turn |
 | `open_app(name)` | medium | Launch an indexed `.exe` by name (e.g. `steam`, `vs code`) |
+| `web_search(query)` | low | Search the web (ddgs); return snippets for the model to answer from |
+| `web_open(url)` | medium | Open an `http`/`https` URL in the default browser |
 | `provide_script(script, code)` | low | Show JSON in chat; **never executes**; ends the turn |
+
+**Web routing:** facts / weather / news → `web_search` then answer in chat. Open GitHub, YouTube, a link → `web_open`. No Playwright or form-filling in this demo.
 
 ## Safety rules
 
