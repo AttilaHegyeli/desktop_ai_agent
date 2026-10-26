@@ -9,10 +9,19 @@
       "/set format json"
     ]
   },
-  "program_files_index": {
+  "folder_index": {
     "enabled": true,
-    "resolve_exe": true,
-    "drives": ["C", "D", "E"]
+    "drives": ["C", "D", "E"],
+    "apps": {
+      "enabled": true,
+      "include_start_menu": true,
+      "include_installed_apps": true,
+      "include_appx": true,
+      "include_games_folders": true,
+      "extra_roots": [],
+      "max_exe_depth": 4,
+      "max_exes": 20000
+    }
   },
   "formats": {
     "response_schema": {

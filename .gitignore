@@ -5,9 +5,10 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+*.log
+logs/
 config/program_files_index.json
 config/program_files_index.txt
-logs/audit.jsonl
-logs/screenshots/
+config/important_files_index.json
+config/important_files_index.txt
 tryloop.py
-
