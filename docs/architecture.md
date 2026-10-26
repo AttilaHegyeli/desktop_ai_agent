@@ -17,7 +17,7 @@ Input → Orchestrator → Core AI (gemma4) → Action Layer → Output
 | **Orchestrator** | Run the agent loop; never touches the OS | `agent_loop`, `AgentService`, system prompt |
 | **Core AI** | Understand the task; emit tool calls or text | Ollama + gemma4; Program Files index |
 | **Action layer** | Validate and execute tools; feed results back | Registry → executor → handlers |
-| **Output** | Show / speak the result | UI terminal; optional edge-tts / SAPI |
+| **Output** | Show / speak the result | Top-edge chat bar (last me/ai); optional edge-tts / SAPI |
 
 The arrow from **action layer → orchestrator** is the self-correction loop: after each tool result (or rejection), the model gets another turn until the task is done or a stop limit hits.
 
@@ -78,5 +78,6 @@ src/desktop_ai_agent/
   core/                   # Ollama, session, chat, folder_index
   action/                 # registry, executor, handlers, tools
   output/tts.py           # speaker
-  ui/launcher.py          # setup UI + terminal
+  ui/launcher.py          # setup UI
+  ui/overlay_bar.py       # always-on-top top-edge chat bar
 ```

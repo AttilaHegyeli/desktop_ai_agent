@@ -25,7 +25,7 @@ Or `scripts\start.bat`. First run indexes application `.exe` files, starts Ollam
 
 ### Typed chat
 
-Type in the terminal and submit. Always available; no extra packages.
+Hover the top-edge bar, type in the input field, press Enter or ▶. Always available; no extra packages.
 
 ### Mic (push-to-talk)
 

@@ -30,10 +30,14 @@
     }
   },
   "ui": {
-    "title": "Desktop AI Agent — Ollama Setup",
+    "title": "Desktop AI Agent — Configuration",
     "width": 820,
     "height": 640,
-    "auto_open": true
+    "auto_open": true,
+    "bar_width": 520,
+    "bar_auto_hide_ms": 20000,
+    "bar_collapsed_height": 28,
+    "bar_top_margin": 10
   },
   "voice": {
     "enabled": true,

@@ -8,11 +8,14 @@ version = "0.1.0"
 description = "Manual Ollama / Gemma4 startup agent with auto configuration"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "Pillow>=10.0",
+    "pymupdf>=1.24",
+]
 
 [project.optional-dependencies]
 voice = ["faster-whisper>=1.0", "sounddevice>=0.4", "numpy>=1.26"]
-screenshot = ["mss>=9.0", "Pillow>=10.0"]
+screenshot = ["mss>=9.0"]
 tts = ["pyttsx3>=2.90", "edge-tts>=6.1", "pygame>=2.5"]
 dev = ["pytest>=8.0"]
 
@@ -21,6 +24,9 @@ desktop-ai-agent = "desktop_ai_agent.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+desktop_ai_agent = ["ui/assets/icons/*.svg"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
