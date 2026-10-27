@@ -33,6 +33,7 @@ _ACCENT_SOFT = "#eeedff"
 _SUCCESS = "#30a46c"
 _INPUT_STROKE = "#e5e5eb"
 _REPLY_BG = "#efeff6"
+_PROMPT_HISTORY_MAX = 20
 
 
 def _place_icon(
@@ -337,6 +338,9 @@ class OverlayBar:
         self._hide_job: str | None = None
         self._user = ""
         self._ai: str | None = None
+        self._prompt_history: list[str] = []
+        self._history_index: int | None = None
+        self._history_draft = ""
 
         self.win = tk.Toplevel(master)
         self.win.overrideredirect(True)
@@ -512,6 +516,8 @@ class OverlayBar:
         self._top.bind("<Configure>", self._layout_composer, add="+")
         self._top.bind("<Button-1>", lambda _e: self.focus_prompt(), add="+")
         self.prompt.bind("<Return>", lambda _e: self._fire_send())
+        self.prompt.bind("<Up>", lambda e: self._history_step(-1))
+        self.prompt.bind("<Down>", lambda e: self._history_step(1))
         self.prompt.bind("<Key>", self._on_prompt_key, add="+")
         self.prompt.configure(state=tk.DISABLED)
         self._placeholder = "Ask anything…"
@@ -650,6 +656,36 @@ class OverlayBar:
         if self._busy or not self._ready:
             return "break"
         return None
+
+    def _history_step(self, delta: int) -> str:
+        """Browse typed submits with Up/Down (newest first step; max depth capped)."""
+        if self._busy or not self._ready or not self._prompt_history:
+            return "break"
+        if self._history_index is None:
+            if delta >= 0:
+                return "break"
+            self._history_draft = self.get_prompt()
+            self._history_index = len(self._prompt_history) - 1
+        else:
+            nxt = self._history_index + delta
+            if nxt < 0:
+                self._history_index = 0
+            elif nxt >= len(self._prompt_history):
+                self._history_index = None
+                self._fill_prompt(self._history_draft)
+                return "break"
+            else:
+                self._history_index = nxt
+        self._fill_prompt(self._prompt_history[self._history_index])
+        return "break"
+
+    def _fill_prompt(self, text: str) -> None:
+        self._clear_placeholder()
+        self.prompt.configure(state=tk.NORMAL, fg=_FG)
+        self.prompt.delete(0, tk.END)
+        if text:
+            self.prompt.insert(0, text)
+        self.prompt.icursor(tk.END)
 
     def _bind_hover_tree(self, *widgets: tk.Misc) -> None:
         for w in widgets:
@@ -1020,6 +1056,13 @@ class OverlayBar:
         return self.prompt.get().strip()
 
     def clear_prompt(self) -> None:
+        text = self.get_prompt()
+        if text and (not self._prompt_history or self._prompt_history[-1] != text):
+            self._prompt_history.append(text)
+            if len(self._prompt_history) > _PROMPT_HISTORY_MAX:
+                self._prompt_history = self._prompt_history[-_PROMPT_HISTORY_MAX:]
+        self._history_index = None
+        self._history_draft = ""
         was = str(self.prompt.cget("state"))
         self.prompt.configure(state=tk.NORMAL)
         self.prompt.delete(0, tk.END)
