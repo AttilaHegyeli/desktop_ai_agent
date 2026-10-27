@@ -20,8 +20,11 @@ class TestSystemPrompt(unittest.TestCase):
         self.assertIn("Do you want a script for it?", SYSTEM_PROMPT)
 
     def test_has_the_numbered_rules(self):
-        for n in range(1, 14):
+        for n in range(1, 15):
             self.assertIn(f"\n{n}. ", SYSTEM_PROMPT)
+
+    def test_asks_for_short_scannable_replies(self):
+        self.assertIn("short and scannable", SYSTEM_PROMPT)
 
     def test_prompt_does_not_duplicate_the_tool_list(self):
         # Only routing-critical tools are referenced by name.

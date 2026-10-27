@@ -5,6 +5,7 @@ import tkinter as tk
 from collections.abc import Callable
 from typing import Any, Literal
 
+from desktop_ai_agent.ui.chat_text import normalize_chat_reply
 from desktop_ai_agent.ui.icons import photo_icon
 
 BarMode = Literal["collapsed", "expanded", "reply"]
@@ -34,6 +35,13 @@ _SUCCESS = "#30a46c"
 _INPUT_STROKE = "#e5e5eb"
 _REPLY_BG = "#efeff6"
 _PROMPT_HISTORY_MAX = 20
+# Compact while thinking; taller (scrollable) once a reply is typing / shown.
+_AI_THINK_LINES = 2
+_AI_THINK_PX = 36
+_AI_VIEW_LINES = 6
+_AI_VIEW_PX = 108
+_TYPE_MS = 16
+_THINK_DOT_MS = 420
 
 
 def _place_icon(
@@ -56,14 +64,15 @@ def _place_icon(
 
 
 def format_exchange_lines(user: str, ai: str | None) -> tuple[str, str]:
-    """Return the two display lines for the reply panel (never more than me + ai)."""
+    """Return the two display strings for the reply panel (never more than me + ai)."""
     me = f"me: {(user or '').strip()}"
     if ai is None:
-        return me, "ai: …"
-    return me, f"ai: {(ai or '').strip()}"
+        return me, "…"
+    return me, normalize_chat_reply(ai)
 
 
 def clip_line(text: str, max_chars: int = 120) -> str:
+    """Single-line clip for the short YOU row (AI text uses the scroll panel instead)."""
     text = (text or "").replace("\n", " ").strip()
     if len(text) <= max_chars:
         return text
@@ -341,6 +350,11 @@ class OverlayBar:
         self._prompt_history: list[str] = []
         self._history_index: int | None = None
         self._history_draft = ""
+        self._type_job: str | None = None
+        self._type_target = ""
+        self._type_index = 0
+        self._dot_job: str | None = None
+        self._dot_phase = 0
 
         self.win = tk.Toplevel(master)
         self.win.overrideredirect(True)
@@ -378,17 +392,43 @@ class OverlayBar:
             wraplength=self._chat_wraplength(),
         )
         self._me_lbl.pack(fill=tk.X, pady=(0, 4))
-        self._ai_lbl = tk.Label(
+        self._ai_hdr = tk.Label(
             self._exchange_text,
-            text="AI  ·  Your response will appear here.",
+            text="AI",
             anchor=tk.W,
-            justify=tk.LEFT,
+            bg=_CARD,
+            fg=_MUTED,
+            font=("Segoe UI Semibold", 8),
+        )
+        self._ai_hdr.pack(fill=tk.X, pady=(0, 2))
+        self._ai_panel = tk.Frame(self._exchange_text, bg=_CARD, highlightthickness=0)
+        self._ai_panel.pack(fill=tk.BOTH, expand=True)
+        self._ai_scroll = tk.Scrollbar(self._ai_panel, orient=tk.VERTICAL)
+        self._ai_view = tk.Text(
+            self._ai_panel,
+            height=_AI_VIEW_LINES,
+            wrap=tk.WORD,
             bg=_CARD,
             fg=_FG,
             font=("Segoe UI Semibold", 10),
-            wraplength=self._chat_wraplength(),
+            relief=tk.FLAT,
+            highlightthickness=0,
+            bd=0,
+            padx=0,
+            pady=0,
+            cursor="arrow",
+            yscrollcommand=self._ai_scroll.set,
         )
-        self._ai_lbl.pack(fill=tk.X)
+        self._ai_scroll.configure(command=self._ai_view.yview)
+        self._ai_view.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._ai_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self._ai_view.insert("1.0", "Your response will appear here.")
+        self._ai_view.configure(state=tk.DISABLED)
+        self._ai_view.bind("<MouseWheel>", self._on_ai_wheel)
+        self._ai_view.bind("<Enter>", self._on_enter, add="+")
+        self._ai_view.bind("<Leave>", self._on_leave, add="+")
+        self._ai_scroll.bind("<Enter>", self._on_enter, add="+")
+        self._ai_scroll.bind("<Leave>", self._on_leave, add="+")
 
         # Header: app identity and quiet utility controls.
         self._header = tk.Frame(self._body, bg=_CARD, highlightthickness=0)
@@ -582,7 +622,8 @@ class OverlayBar:
             self._exchange_accent,
             self._exchange_text,
             self._me_lbl,
-            self._ai_lbl,
+            self._ai_hdr,
+            self._ai_panel,
             self._header,
             self._brand_mark,
             self._brand_text,
@@ -733,15 +774,113 @@ class OverlayBar:
     def close_chat(self) -> None:
         self._cancel_auto_hide()
         self._cancel_leave()
+        self._cancel_typewriter()
+        self._cancel_thinking_dots()
         self._user = ""
         self._ai = None
-        self._me_lbl.configure(text="me:")
-        self._ai_lbl.configure(text="ai:", fg=_FG)
+        self._me_lbl.configure(text="YOU  ·")
+        self._set_ai_text("", muted=False, follow_end=False)
         try:
             self.win.focus_set()
         except tk.TclError:
             pass
         self._apply_mode("collapsed")
+
+    def _on_ai_wheel(self, event: tk.Event) -> str:  # type: ignore[type-arg]
+        """Scroll the AI reply without collapsing the bar."""
+        if event.delta:
+            self._ai_view.yview_scroll(int(-event.delta / 120), "units")
+        return "break"
+
+    def _set_ai_text(self, text: str, *, muted: bool, follow_end: bool = False) -> None:
+        self._ai_view.configure(state=tk.NORMAL, fg=_MUTED if muted else _FG)
+        self._ai_view.delete("1.0", tk.END)
+        if text:
+            self._ai_view.insert("1.0", text)
+        self._ai_view.configure(state=tk.DISABLED)
+        if follow_end:
+            self._ai_view.see(tk.END)
+        else:
+            self._ai_view.yview_moveto(0.0)
+        self._refresh_ai_scroll()
+
+    def _refresh_ai_scroll(self) -> None:
+        """Show the scrollbar only when the reply overflows the fixed viewport."""
+        try:
+            self.win.update_idletasks()
+            first, last = self._ai_view.yview()
+            if self._ai is None or last - first >= 0.999:
+                self._ai_scroll.pack_forget()
+            else:
+                self._ai_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        except tk.TclError:
+            pass
+
+    def _cancel_typewriter(self) -> None:
+        if self._type_job is not None:
+            self.win.after_cancel(self._type_job)
+            self._type_job = None
+        self._type_target = ""
+        self._type_index = 0
+
+    def _cancel_thinking_dots(self) -> None:
+        if self._dot_job is not None:
+            self.win.after_cancel(self._dot_job)
+            self._dot_job = None
+        self._dot_phase = 0
+
+    def _start_thinking_dots(self) -> None:
+        self._cancel_thinking_dots()
+        self._dot_phase = 0
+        self._tick_thinking_dots()
+
+    def _tick_thinking_dots(self) -> None:
+        self._dot_job = None
+        if self._ai is not None:
+            return
+        dots = "." * ((self._dot_phase % 3) + 1)
+        self._set_ai_text(f"Thinking{dots}", muted=True, follow_end=False)
+        self._dot_phase += 1
+        self._dot_job = self.win.after(_THINK_DOT_MS, self._tick_thinking_dots)
+
+    def _start_typewriter(self, text: str) -> None:
+        self._cancel_typewriter()
+        self._type_target = text or ""
+        self._type_index = 0
+        if not self._type_target:
+            self._set_ai_text("", muted=False, follow_end=False)
+            return
+        # Instant for tiny status pings; animate real answers.
+        if len(self._type_target) <= 3:
+            self._set_ai_text(self._type_target, muted=False, follow_end=False)
+            return
+        self._set_ai_text("", muted=False, follow_end=False)
+        self._tick_typewriter()
+
+    def _type_chunk_size(self, remaining: int) -> int:
+        # Longer replies type a bit faster so they stay snappy.
+        total = len(self._type_target)
+        if total > 600:
+            return min(remaining, 6)
+        if total > 200:
+            return min(remaining, 3)
+        return min(remaining, 2)
+
+    def _tick_typewriter(self) -> None:
+        self._type_job = None
+        target = self._type_target
+        if self._type_index >= len(target):
+            self._refresh_ai_scroll()
+            if not self._pointer_inside and not self._busy:
+                self._arm_auto_hide()
+            return
+        step = self._type_chunk_size(len(target) - self._type_index)
+        self._type_index += step
+        self._set_ai_text(target[: self._type_index], muted=False, follow_end=True)
+        self._type_job = self.win.after(_TYPE_MS, self._tick_typewriter)
+
+    def _is_typing(self) -> bool:
+        return self._type_job is not None
 
     def _on_context(self, event: tk.Event) -> None:  # type: ignore[type-arg]
         try:
@@ -768,7 +907,7 @@ class OverlayBar:
             return
         if self.win.focus_get() == self.prompt:
             return
-        if self._busy:
+        if self._busy or self._is_typing():
             return
         if self._mode == "expanded":
             self._apply_mode("collapsed")
@@ -793,7 +932,7 @@ class OverlayBar:
 
     def _auto_hide(self) -> None:
         self._hide_job = None
-        if self._pointer_inside or self._busy:
+        if self._pointer_inside or self._busy or self._is_typing():
             return
         if self.win.focus_get() == self.prompt:
             return
@@ -893,6 +1032,12 @@ class OverlayBar:
         )
         self._body.configure(width=body_w, height=body_h)
 
+    def _reply_panel_size(self) -> tuple[int, int, int]:
+        """Return (text_lines, panel_px, window_base_h) for thinking vs answer."""
+        if self._ai is None:
+            return _AI_THINK_LINES, _AI_THINK_PX, 178
+        return _AI_VIEW_LINES, _AI_VIEW_PX, 250
+
     def _apply_mode(self, mode: BarMode) -> None:
         self._mode = mode
         self._exchange.pack_forget()
@@ -906,10 +1051,14 @@ class OverlayBar:
 
         self._reflow_chat()
         if mode == "reply":
+            lines, px, base_h = self._reply_panel_size()
+            self._ai_view.configure(height=lines)
+            self._ai_panel.configure(height=px)
+            self._ai_panel.pack_propagate(False)
             self._exchange.pack(fill=tk.X, padx=18, before=self._top)
+        else:
+            base_h = 128
 
-        # Compact command palette; height grows with wrapped reply text.
-        base_h = 128 if mode != "reply" else 182
         self._place(self._width, base_h, top_gap=True)
         self._draw_card(self._width, base_h, nub=False)
         self.win.update_idletasks()
@@ -919,8 +1068,8 @@ class OverlayBar:
             + self._body_inset * 2
             + 4
         )
-        # Cap tall replies so the overlay stays on-screen.
-        max_h = max(base_h, int(self.win.winfo_screenheight() * 0.45))
+        # Cap so the overlay stays on-screen; overflow scrolls inside AI panel.
+        max_h = max(base_h, int(self.win.winfo_screenheight() * 0.42))
         needed = min(max(needed, base_h), max_h)
         if needed != base_h:
             self._place(self._width, needed, top_gap=True)
@@ -939,6 +1088,8 @@ class OverlayBar:
     def destroy(self) -> None:
         self._cancel_leave()
         self._cancel_auto_hide()
+        self._cancel_typewriter()
+        self._cancel_thinking_dots()
         try:
             self.win.destroy()
         except tk.TclError:
@@ -979,13 +1130,17 @@ class OverlayBar:
         return max(220, self._width - 140)
 
     def _chat_clip_chars(self) -> int:
-        # Scale clipping with bar width so replies stay readable on wide screens.
+        # YOU row only — AI replies scroll instead of hard-clipping.
         return max(100, self._width // 3)
 
     def _reflow_chat(self) -> None:
         wrap = self._chat_wraplength()
         self._me_lbl.configure(wraplength=wrap)
-        self._ai_lbl.configure(wraplength=wrap)
+        # Keep the Text widget width in sync with the card so wrapping matches.
+        try:
+            self._ai_view.configure(width=max(28, wrap // 7))
+        except tk.TclError:
+            pass
 
     def _refresh_controls(self) -> None:
         ok = self._ready and not self._busy
@@ -1077,21 +1232,22 @@ class OverlayBar:
             self.prompt.focus_force()
 
     def set_exchange(self, user: str, ai: str | None) -> None:
+        self._cancel_typewriter()
+        self._cancel_thinking_dots()
+        self._cancel_auto_hide()
         self._user = user or ""
         self._ai = ai
-        me, ai_line = format_exchange_lines(self._user, self._ai)
+        me, ai_body = format_exchange_lines(self._user, self._ai)
         limit = self._chat_clip_chars()
         self._reflow_chat()
         self._me_lbl.configure(text=clip_line(me, max_chars=limit).replace("me:", "YOU  ·", 1))
-        self._ai_lbl.configure(
-            text=clip_line(ai_line, max_chars=limit).replace("ai:", "AI  ·", 1),
-            fg=_MUTED if ai is None else _FG,
-        )
-        self._cancel_auto_hide()
+        # Resize first: compact while thinking, taller once the answer exists.
         self._apply_mode("reply")
         self.show()
-        if ai is not None and not self._pointer_inside:
-            self._arm_auto_hide()
+        if ai is None:
+            self._start_thinking_dots()
+        else:
+            self._start_typewriter(ai_body)
 
     def status_message(self, text: str) -> None:
         if not self._user:
