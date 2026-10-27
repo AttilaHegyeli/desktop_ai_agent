@@ -61,6 +61,11 @@ class ChatClient:
         self.messages.clear()
         self._seed()
 
+    def drop_images(self) -> None:
+        """Remove attached images from history so a fresh screenshot can replace them."""
+        for msg in self.messages:
+            msg.pop("images", None)
+
     # ---- plain text chat (the original JSON scriptwriter path) --------------
     def ask(self, user_text: str) -> str:
         self.messages.append({"role": "user", "content": user_text})

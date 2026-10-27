@@ -25,7 +25,14 @@ def wait(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def screenshot(args: dict[str, Any]) -> dict[str, Any]:
-    return capture_screen()
+    return capture_screen(
+        scope=args.get("scope", "primary"),
+        monitor=args.get("monitor"),
+        x=args.get("x"),
+        y=args.get("y"),
+        width=args.get("width"),
+        height=args.get("height"),
+    )
 
 
 def provide_script(args: dict[str, Any]) -> dict[str, str]:

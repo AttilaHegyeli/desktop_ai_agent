@@ -169,8 +169,56 @@ def build_default_registry() -> ActionRegistry:
         [
             ActionSpec(
                 name="screenshot",
-                description="Capture the current screen and return it as an image.",
+                description=(
+                    "Capture the screen (or a region) and return it as an image. "
+                    "Primary way to answer on-screen questions — use this whenever "
+                    "the answer might be visible on the desktop. Default scope is "
+                    "primary monitor. Use monitor/region only when the user names "
+                    "a specific display or area."
+                ),
                 risk=Risk.LOW,
+                params=(
+                    Param(
+                        "scope",
+                        "string",
+                        "What to capture: primary (default), all monitors, one monitor, or a region",
+                        required=False,
+                        enum=("primary", "all", "monitor", "region"),
+                    ),
+                    Param(
+                        "monitor",
+                        "integer",
+                        "1-based monitor index when scope is monitor",
+                        required=False,
+                        minimum=1,
+                    ),
+                    Param(
+                        "x",
+                        "integer",
+                        "Region left (virtual-desktop coords) when scope is region",
+                        required=False,
+                    ),
+                    Param(
+                        "y",
+                        "integer",
+                        "Region top (virtual-desktop coords) when scope is region",
+                        required=False,
+                    ),
+                    Param(
+                        "width",
+                        "integer",
+                        "Region width when scope is region",
+                        required=False,
+                        minimum=1,
+                    ),
+                    Param(
+                        "height",
+                        "integer",
+                        "Region height when scope is region",
+                        required=False,
+                        minimum=1,
+                    ),
+                ),
             ),
             ActionSpec(
                 name="wait",
