@@ -23,23 +23,45 @@ from desktop_ai_agent.action.executor import Executor, StepResult, plan_from_too
 
 EventFn = Callable[[str, Any], None]
 
-# User phrasing that usually means "look at my screen" (EN + HU). Used only to decide
+# English phrasing that usually means "look at my screen". Used only to decide
 # whether to auto-capture; the screenshot tool still works for any other case.
 _VISION_RE = re.compile(
     r"""
     \b(
-        screenshot | screen\s*shot | screenshotol |
-        what\s+(do\s+you\s+)?see |
+        screenshot | screen\s*shot |
+        # "what do you see" / "what you see" / "tell me what you see" / "can you see"
+        (tell\s+me\s+|can\s+you\s+|do\s+you\s+)?what\s+(do\s+you\s+|you\s+)?see |
+        (can|do)\s+you\s+see |
+        what\s+(is|'s)\s+(there|here) |
+        what\s+(is|'s)\s+on\s+(the\s+|my\s+)?(screen|desktop|monitor|display|window) |
+        what('s|\s+is)\s+playing |
+        now[\s-]?playing |
+        (tell\s+me\s+)?(the\s+)?(first|current|selected)\s+(song|track|tab|window|app) |
+        which\s+(song|track|tab|window|app|file) |
         (look|looking)\s+(at\s+)?(my\s+)?(screen|desktop|monitor|display) |
         (on|at)\s+(my\s+)?(screen|desktop|monitor|display|computer) |
-        (describe|read|check)\s+(the\s+|my\s+)?(screen|desktop|window) |
-        current\s+(screen|desktop|window)
+        (describe|read|check)\s+(the\s+|my\s+|this\s+)?(screen|desktop|window|app) |
+        (read|check)\s+(this|that|it) |
+        current\s+(screen|desktop|window) |
+        (show|see)\s+(me\s+)?(my\s+)?(screen|desktop|monitor|display) |
+        visible\s+on\s+(my\s+|the\s+)?(screen|desktop|monitor|display)
     )\b
     |
     \b(see|seeing)\s+(on|what).{0,40}\b(screen|desktop|monitor|computer|display)\b
+    |
+    # "open Spotify and tell me what is there" / "launch X and describe what you see"
+    \b(open|launch)\b.{0,100}\b(
+        tell\s+me\s+what |
+        what\s+(you\s+see|is\s+there|'s\s+there|is\s+playing) |
+        describe\s+(what|it|the) |
+        (first|current)\s+(song|track)
+    )\b
     """,
     re.IGNORECASE | re.VERBOSE,
 )
+
+# Actions that can change what is on screen; mid-task vision refresh only after these.
+_UI_CHANGING = frozenset({"wait", "open_app", "web_open"})
 
 
 def needs_screen_vision(text: str) -> bool:
@@ -68,18 +90,35 @@ def _png_b64(path: str | Path) -> str:
     return base64.b64encode(Path(path).read_bytes()).decode("ascii")
 
 
+def _drop_prior_images(client: Any) -> None:
+    """Drop stale screenshots from chat history before attaching a fresh one."""
+    drop = getattr(client, "drop_images", None)
+    if callable(drop):
+        drop()
+
+
 def _attach_screenshot_images(client: Any, results: list[StepResult]) -> None:
     """After an explicit screenshot tool call, feed the PNG as a multimodal user message.
 
     Tool results stay text-only (path/size). Ollama vision expects images on user messages.
+    Prior images are dropped so the model only sees the new capture.
     """
+    fresh: list[str] = []
     for r in results:
         if not r.ok or r.name != "screenshot" or not isinstance(r.output, dict):
             continue
         path = r.output.get("path")
         if not path:
             continue
-        client.add_user("Screenshot attached.", images=[_png_b64(path)])
+        try:
+            fresh.append(_png_b64(path))
+        except OSError:
+            continue
+    if not fresh:
+        return
+    _drop_prior_images(client)
+    for b64 in fresh:
+        client.add_user("Screenshot attached.", images=[b64])
 
 
 def _capture_b64(executor: Executor, emit: EventFn) -> str | None:
@@ -124,6 +163,9 @@ def run_task(
             emit("screenshot", "auto")
         else:
             vision = False
+    # New vision input: drop stale screenshots from prior turns, then attach fresh ones.
+    if attach:
+        _drop_prior_images(client)
     client.add_user(user_text, attach or None)
     tools = executor.registry.to_tools()  # what the model sees == what we enforce
     failed_rounds = 0
@@ -165,11 +207,13 @@ def run_task(
                 emit("final", text)
                 return TaskResult("done", text, round_no)
             failed_rounds = 0
-            # Mid-task refresh only while this task is already using vision, and the
-            # plan did not just capture (image already attached above).
-            if auto_screenshot and vision and not had_screenshot:
+            # Mid-task refresh only while this task is already using vision, the
+            # plan did not just capture, and a UI-changing action ran.
+            ui_changed = any(r.ok and r.name in _UI_CHANGING for r in results)
+            if auto_screenshot and vision and not had_screenshot and ui_changed:
                 b64 = _capture_b64(executor, emit)
                 if b64:
+                    _drop_prior_images(client)
                     client.add_user("Current screen.", images=[b64])
                     emit("screenshot", "auto")
             continue

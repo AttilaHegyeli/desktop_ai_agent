@@ -103,6 +103,16 @@ class TestToolCalling(unittest.TestCase):
         self.assertEqual(c.messages[0]["images"], ["BASE64"])
         self.assertEqual(c.messages[1], {"role": "tool", "tool_name": "click", "content": '{"status":"executed"}'})
 
+    def test_drop_images_clears_history_attachments(self):
+        c = ChatClient("m", system="")
+        c.add_user("old", images=["OLD"])
+        c.add_user("note")
+        c.drop_images()
+        self.assertNotIn("images", c.messages[0])
+        self.assertNotIn("images", c.messages[1])
+        c.add_user("fresh", images=["NEW"])
+        self.assertEqual(c.messages[-1]["images"], ["NEW"])
+
     def test_server_error_raises_runtime_error(self):
         p, _ = patched([{"error": "model not found"}])
         c = ChatClient("m")

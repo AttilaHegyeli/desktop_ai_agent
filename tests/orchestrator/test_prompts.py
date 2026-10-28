@@ -6,7 +6,7 @@ from desktop_ai_agent.orchestrator.prompts import SYSTEM_PROMPT
 
 
 # Tools named in the prompt for routing; everything else comes from the registry only.
-_NAMED_IN_PROMPT = frozenset({"provide_script", "web_search", "web_open"})
+_NAMED_IN_PROMPT = frozenset({"provide_script", "web_search", "web_open", "screenshot"})
 
 
 class TestSystemPrompt(unittest.TestCase):
@@ -19,9 +19,17 @@ class TestSystemPrompt(unittest.TestCase):
     def test_contains_the_offer_question(self):
         self.assertIn("Do you want a script for it?", SYSTEM_PROMPT)
 
+    def test_requires_try_list_when_blocked(self):
+        self.assertIn("try-list", SYSTEM_PROMPT)
+        self.assertIn("lack access", SYSTEM_PROMPT)
+
     def test_has_the_numbered_rules(self):
-        for n in range(1, 15):
+        for n in range(1, 16):
             self.assertIn(f"\n{n}. ", SYSTEM_PROMPT)
+
+    def test_vision_is_primary_tool_guidance(self):
+        self.assertIn("strongest tool is vision", SYSTEM_PROMPT)
+        self.assertIn("Prefer screenshot", SYSTEM_PROMPT)
 
     def test_asks_for_short_scannable_replies(self):
         self.assertIn("short and scannable", SYSTEM_PROMPT)

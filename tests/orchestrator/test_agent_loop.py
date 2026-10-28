@@ -19,6 +19,9 @@ class FakeClient:
     def add_user(self, text, images=None):
         self.user.append((text, images))
 
+    def drop_images(self):
+        self.user = [(text, None) for text, _imgs in self.user]
+
     def add_tool_result(self, name, content):
         self.tool_msgs.append((name, json.loads(content)))
 
@@ -210,7 +213,7 @@ class TestLoop(unittest.TestCase):
         self.assertEqual(calls, [])
         self.assertEqual(client.user, [("hi there", None)])
 
-    def test_auto_screenshot_refreshes_after_other_tools_only_for_vision_tasks(self):
+    def test_auto_screenshot_refreshes_after_ui_changing_tools_for_vision_tasks(self):
         import base64
         import tempfile
         from pathlib import Path
@@ -239,9 +242,80 @@ class TestLoop(unittest.TestCase):
             res = run_task(client, ex, "look at my screen after a wait")
         self.assertEqual(res.status, "done")
         self.assertEqual(client.user[0][0], "look at my screen after a wait")
-        self.assertIsNotNone(client.user[0][1])
+        # Fresh capture replaces prior images so only "Current screen." keeps pixels.
+        self.assertIsNone(client.user[0][1])
         self.assertEqual(client.user[1][0], "Current screen.")
         self.assertEqual(base64.b64decode(client.user[1][1][0]), png)
+
+    def test_new_vision_input_drops_prior_screenshot(self):
+        import base64
+        import tempfile
+        from pathlib import Path
+
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "shot.png"
+            path.write_bytes(png)
+            reg = ActionRegistry([ActionSpec("screenshot", "capture", Risk.LOW)])
+            handlers = {
+                "screenshot": lambda a: {"path": str(path), "width": 1, "height": 1},
+            }
+            ex = Executor(reg, handlers)
+            client = FakeClient([
+                ChatTurn(content="old answer"),
+                ChatTurn(content="new answer"),
+            ])
+            run_task(client, ex, "look at my screen")
+            self.assertIsNotNone(client.user[0][1])
+            run_task(client, ex, "what do you see now on my screen?")
+        self.assertEqual(client.user[0][0], "look at my screen")
+        self.assertIsNone(client.user[0][1])
+        self.assertEqual(client.user[1][0], "what do you see now on my screen?")
+        self.assertEqual(base64.b64decode(client.user[1][1][0]), png)
+
+    def test_non_vision_input_keeps_prior_screenshot(self):
+        client = FakeClient([ChatTurn(content="Hello!")])
+        client.add_user("earlier", images=["OLD_B64"])
+        ex, _ = make_executor()
+        run_task(client, ex, "hi there")
+        self.assertEqual(client.user[0], ("earlier", ["OLD_B64"]))
+        self.assertEqual(client.user[1], ("hi there", None))
+
+    def test_no_mid_task_refresh_after_web_search_only(self):
+        import base64
+        import tempfile
+        from pathlib import Path
+
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "shot.png"
+            path.write_bytes(png)
+            shot_calls = []
+            reg = ActionRegistry([
+                ActionSpec("web_search", "search", Risk.LOW, (
+                    Param("query", "string", "q"),
+                )),
+                ActionSpec("screenshot", "capture", Risk.LOW),
+            ])
+            handlers = {
+                "web_search": lambda a: {"results": []},
+                "screenshot": lambda a: shot_calls.append(1)
+                or {"path": str(path), "width": 1, "height": 1},
+            }
+            ex = Executor(reg, handlers)
+            client = FakeClient([
+                tool_turn(call("web_search", query="x")),
+                ChatTurn(content="done"),
+            ])
+            res = run_task(client, ex, "look at my screen and search x")
+        self.assertEqual(res.status, "done")
+        # One auto-capture at start; no mid-task refresh after web_search.
+        self.assertEqual(len(shot_calls), 1)
+        self.assertEqual(len(client.user), 1)
 
 
 if __name__ == "__main__":

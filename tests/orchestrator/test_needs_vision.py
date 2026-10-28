@@ -8,11 +8,23 @@ class TestNeedsScreenVision(unittest.TestCase):
         for text in (
             "what do you see?",
             "What do you see on my computer",
+            "tell me what you see",
+            "tell me what is there",
+            "what is there",
+            "what's playing",
+            "tell me the first song",
+            "which tab is open",
+            "can you see this",
+            "read this",
+            "open spotify and tell me what is there",
+            "open chrome and describe what you see",
+            "open spotify and tell me the first song",
             "look at my screen",
             "describe the screen",
             "take a screenshot",
-            "mi van a képernyőn",
-            "mit látsz",
+            "show me my desktop",
+            "check the window",
+            "current screen please",
         ):
             self.assertTrue(needs_screen_vision(text), text)
 
@@ -23,6 +35,8 @@ class TestNeedsScreenVision(unittest.TestCase):
             "wait 2 seconds",
             "open spotify",
             "thanks",
+            "search for weather",
+            "what is the capital of France",
         ):
             self.assertFalse(needs_screen_vision(text), text)
 
