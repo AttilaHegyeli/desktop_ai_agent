@@ -3,7 +3,7 @@ the right element by name?  (Throwaway measuring tool. Read-only. Never clicks.)
 
 1. Captures the screen and scans the clickable elements via UI Automation.
 2. Saves elements.png: every element as a numbered yellow box (shows what UIA can see).
-3. For each target in scripts/aim_targets.txt, sends the model ONLY the text list (no
+3. For each target in scripts/probe_targets.txt, sends the model ONLY the text list (no
    image) and asks which number it is. The pick is drawn as a green box + cross.
 
     python scripts/ui_probe.py              (all targets)
@@ -127,7 +127,8 @@ def run_probe(
     started = time.perf_counter()
     elements = scan()
     scan_seconds = round(time.perf_counter() - started, 2)
-    listing, listed = format_for_model(elements, max_items=max_items)
+    screen = (origin[0], origin[1], origin[0] + full.width, origin[1] + full.height)
+    listing, listed = format_for_model(elements, max_items=max_items, screen=screen)
     hidden = (scan_stats or {}).get("hidden", 0)
     log(f"UI Automation: {len(elements)} elements ({listed} named, sent to the model), "
         f"{hidden} hidden behind other windows dropped, in {scan_seconds}s")
@@ -187,7 +188,7 @@ def run_probe(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="List on-screen UI elements and test picking them by name.")
-    parser.add_argument("--targets", default=str(ROOT / "scripts" / "aim_targets.txt"))
+    parser.add_argument("--targets", default=str(ROOT / "scripts" / "probe_targets.txt"))
     parser.add_argument("--model", default="gemma4")
     parser.add_argument("--host", default="http://127.0.0.1:11434")
     parser.add_argument("--quick", action="store_true", help="only the first 3 targets")

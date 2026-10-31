@@ -159,21 +159,73 @@ def _short(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
-def format_for_model(elements: list[UiElement], max_items: int = 400, max_name: int = 60) -> tuple[str, int]:
-    """One line per NAMED element, e.g. '17: Button "Volume" (taskbar)'.
+def screen_extent(elements: list[UiElement]) -> tuple[int, int, int, int] | None:
+    """(left, top, right, bottom) around all elements: a stand-in for the screen."""
+    if not elements:
+        return None
+    return (min(e.left for e in elements), min(e.top for e in elements),
+            max(e.right for e in elements), max(e.bottom for e in elements))
 
-    Unnamed elements are left out (the model cannot match them by text). Returns the
-    text and how many elements it lists (at most `max_items`, to fit the context).
+
+def position_label(el: UiElement, screen: tuple[int, int, int, int]) -> str:
+    """Rough place on screen in a 3 x 3 grid: 'top-left', 'center', 'bottom-right', ...
+
+    Cheap way to tell apart elements with the same name (two "Close" buttons).
     """
+    left, top, right, bottom = screen
+    cx, cy = el.center
+    col = min(2, max(0, (cx - left) * 3 // max(1, right - left)))
+    row = min(2, max(0, (cy - top) * 3 // max(1, bottom - top)))
+    vertical, horizontal = ("top", "middle", "bottom")[row], ("left", "center", "right")[col]
+    if (vertical, horizontal) == ("middle", "center"):
+        return "center"
+    return f"{vertical}-{horizontal}"
+
+
+def format_for_model(
+    elements: list[UiElement],
+    max_items: int = 400,
+    max_name: int = 60,
+    screen: tuple[int, int, int, int] | None = None,
+) -> tuple[str, int]:
+    """One line per NAMED element, e.g. '17: Button "Volume" (taskbar, bottom-right)'.
+
+    Unnamed elements are left out (the model cannot match them by text). `screen` is
+    (left, top, right, bottom) for the position hints; by default the area all elements
+    span. Returns the text and how many elements it lists (at most `max_items`).
+    """
+    area = screen or screen_extent(elements)
     lines: list[str] = []
     for el in elements:
         if not el.name:
             continue
         if len(lines) >= max_items:
             break
-        app = f" ({_short(el.app, 40)})" if el.app else ""
-        lines.append(f'{el.id}: {el.type} "{_short(el.name, max_name)}"{app}')
+        where = [_short(el.app, 40)] if el.app else []
+        if area is not None:
+            where.append(position_label(el, area))
+        suffix = f" ({', '.join(where)})" if where else ""
+        lines.append(f'{el.id}: {el.type} "{_short(el.name, max_name)}"{suffix}')
     return "\n".join(lines), len(lines)
+
+
+def match_element(old: UiElement, fresh: list[UiElement], tolerance: int = 20) -> UiElement | None:
+    """Find `old` again in a newer scan, or None if it is gone or has moved.
+
+    IDs are only valid within one scan, so before acting on an element the caller
+    rescans and checks: same name, type and window, centre within `tolerance` px.
+    If several qualify, the nearest wins.
+    """
+    ox, oy = old.center
+    best: tuple[float, UiElement] | None = None
+    for el in fresh:
+        if (el.name, el.type, el.app) != (old.name, old.type, old.app):
+            continue
+        x, y = el.center
+        distance = max(abs(x - ox), abs(y - oy))
+        if distance <= tolerance and (best is None or distance < best[0]):
+            best = (distance, el)
+    return best[1] if best else None
 
 
 _ID = re.compile(r'"id"\s*:\s*(null|-?\d+)', re.IGNORECASE)

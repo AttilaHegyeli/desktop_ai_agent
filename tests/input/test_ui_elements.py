@@ -14,6 +14,8 @@ from PIL import Image
 from desktop_ai_agent.input.ui_elements import (
     UiElement,
     is_visible_at,
+    match_element,
+    position_label,
     find_element,
     format_for_model,
     list_ui_elements,
@@ -100,22 +102,58 @@ class TestHiddenFilter(unittest.TestCase):
 class TestFormatAndChoice(unittest.TestCase):
     def setUp(self):
         self.els = [
-            UiElement(1, "Volume", "Button", "taskbar", 0, 0, 10, 10),
-            UiElement(2, "", "Button", "taskbar", 0, 0, 10, 10),
-            UiElement(3, "x" * 100, "ListItem", "desktop", 0, 0, 10, 10),
+            UiElement(1, "Volume", "Button", "taskbar", 1740, 1040, 1780, 1080),
+            UiElement(2, "", "Button", "taskbar", 0, 1040, 40, 1080),
+            UiElement(3, "x" * 100, "ListItem", "desktop", 0, 0, 76, 76),
         ]
+        self.screen = (0, 0, 1920, 1080)
 
-    def test_lists_named_elements_only(self):
-        text, count = format_for_model(self.els)
+    def test_lists_named_elements_only_with_position(self):
+        text, count = format_for_model(self.els, screen=self.screen)
         lines = text.splitlines()
         self.assertEqual(count, 2)
-        self.assertEqual(lines[0], '1: Button "Volume" (taskbar)')
+        self.assertEqual(lines[0], '1: Button "Volume" (taskbar, bottom-right)')
         self.assertTrue(lines[1].startswith('3: ListItem "xxx'))
-        self.assertIn('..." (desktop)', lines[1])  # long names are shortened
+        self.assertIn('..." (desktop, top-left)', lines[1])  # long names are shortened
+
+    def test_position_defaults_to_the_area_the_elements_span(self):
+        text, _ = format_for_model(self.els)
+        self.assertIn("(taskbar, bottom-right)", text)
+
+    def test_position_label_grid(self):
+        def at(x, y):
+            return position_label(UiElement(1, "a", "Button", "", x - 5, y - 5, x + 5, y + 5), self.screen)
+
+        self.assertEqual(at(960, 540), "center")
+        self.assertEqual(at(10, 10), "top-left")
+        self.assertEqual(at(960, 10), "top-center")
+        self.assertEqual(at(1910, 540), "middle-right")
+        self.assertEqual(at(10, 1075), "bottom-left")
+        # negative screen origin (monitor left of the primary)
+        self.assertEqual(position_label(UiElement(1, "a", "Button", "", -1910, 0, -1900, 10),
+                                        (-1920, 0, 0, 1080)), "top-left")
 
     def test_max_items(self):
         _, count = format_for_model(self.els, max_items=1)
         self.assertEqual(count, 1)
+
+    def test_match_element_after_a_rescan(self):
+        old = UiElement(5, "Close", "Button", "Edge", 1880, 0, 1920, 30)
+        fresh = [
+            UiElement(1, "Close", "Button", "Paint", 1880, 0, 1920, 30),  # other window
+            UiElement(2, "Close", "Button", "Edge", 1870, 2, 1910, 32),  # moved 10 px: same one
+            UiElement(3, "Close", "Button", "Edge", 1300, 0, 1340, 30),  # far away
+        ]
+        self.assertEqual(match_element(old, fresh).id, 2)
+        self.assertIsNone(match_element(old, fresh, tolerance=5))
+        self.assertIsNone(match_element(old, [UiElement(9, "Close", "Button", "Edge", 0, 0, 40, 30)]))
+        self.assertIsNone(match_element(old, []))
+
+    def test_match_element_prefers_the_nearest(self):
+        old = UiElement(5, "Tab", "TabItem", "Edge", 100, 0, 200, 30)
+        fresh = [UiElement(1, "Tab", "TabItem", "Edge", 115, 0, 215, 30),
+                 UiElement(2, "Tab", "TabItem", "Edge", 103, 0, 203, 30)]
+        self.assertEqual(match_element(old, fresh).id, 2)
 
     def test_parse_choice(self):
         self.assertEqual(parse_choice('{"id": 17}'), ("id", 17))
@@ -232,7 +270,7 @@ class TestProbe(unittest.TestCase):
     def test_prompt_is_text_only_list_of_named_elements(self):
         self.run_probe('{"id": 2}', targets=["the volume icon"])
         prompt = self.prompts[0]
-        self.assertIn('2: Button "Volume" (taskbar)', prompt)
+        self.assertIn('2: Button "Volume" (taskbar, bottom-right)', prompt)  # probe passes the real screen
         self.assertNotIn("3: Pane", prompt)  # unnamed: not listed
         self.assertIn("Which element is: the volume icon", prompt)
 
@@ -270,6 +308,7 @@ class TestProbe(unittest.TestCase):
         args = probe.parse_args([])
         self.assertEqual((args.scan_only, args.num_ctx, args.max_items), (False, 16384, 400))
         self.assertTrue(probe.parse_args(["--scan-only"]).scan_only)
+        self.assertTrue(Path(args.targets).name == "probe_targets.txt" and Path(args.targets).is_file())
         self.assertEqual((args.show_hidden, probe.parse_args(["--show-hidden"]).show_hidden), (False, True))
 
 
