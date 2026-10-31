@@ -318,5 +318,37 @@ class TestLoop(unittest.TestCase):
         self.assertEqual(len(client.user), 1)
 
 
+
+
+class TestStop(unittest.TestCase):
+    def test_stop_before_running_plan_skips_every_step(self):
+        ex, ran = make_executor()
+        client = FakeClient([tool_turn(call("peek"), call("peek"))])
+        flag = {"stop": False}
+
+        def chat(tools=None, on_chunk=None):
+            flag["stop"] = True  # user hits Stop while the model is replying
+            return client.turns.pop(0)
+
+        client.chat = chat
+        res = run_task(client, ex, "go", should_stop=lambda: flag["stop"])
+        self.assertEqual(res.status, "stopped")
+        self.assertEqual(ran, [])
+        self.assertEqual([m[1]["status"] for m in client.tool_msgs], ["skipped", "skipped"])
+        self.assertIn("stopped", client.user[-1][0])
+
+    def test_cancelled_model_reply_returns_stopped(self):
+        from desktop_ai_agent.core.chat_client import ChatCancelled
+
+        ex, _ = make_executor()
+        client = FakeClient([])
+
+        def chat(tools=None, on_chunk=None):
+            raise ChatCancelled("stopped")
+
+        client.chat = chat
+        res = run_task(client, ex, "go")
+        self.assertEqual((res.status, res.rounds), ("stopped", 1))
+
 if __name__ == "__main__":
     unittest.main()

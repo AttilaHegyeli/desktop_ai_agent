@@ -191,5 +191,43 @@ class TestSystemPrompt(unittest.TestCase):
         self.assertEqual(sent["messages"][0], {"role": "system", "content": "be brief"})
 
 
+
+
+class TestContextUsageAndAbort(unittest.TestCase):
+    def test_usage_is_exact_after_reply_and_reset_by_clear(self):
+        seen = []
+        client = ChatClient("m", system="s", options={"num_ctx": 8192})
+        client.on_usage = seen.append
+        chunks = [
+            {"message": {"content": "a"}},
+            {"message": {"content": "b"}, "done": True, "prompt_eval_count": 100, "eval_count": 2},
+        ]
+        p, _ = patched(chunks)
+        with p:
+            client.chat(tools=TOOLS)
+        self.assertEqual(seen, [1, 2, 102])  # live estimate, then Ollama's exact count
+        self.assertEqual(client.context_limit, 8192)
+        client.clear()
+        self.assertEqual(client.context_used, 0)
+
+    def test_cached_prompt_count_is_treated_as_a_delta(self):
+        client = ChatClient("m", system="s")
+        client.context_used = 500  # previous turn filled 500 tokens
+        p, _ = patched([{"message": {"content": "x"}, "done": True, "prompt_eval_count": 40, "eval_count": 5}])
+        with p:
+            client.chat(tools=TOOLS)
+        self.assertEqual(client.context_used, 545)
+
+    def test_abort_raises_cancelled_and_keeps_history_clean(self):
+        from desktop_ai_agent.core.chat_client import ChatCancelled
+
+        client = ChatClient("m", system="s")
+        client.add_user("hi")
+        client.on_usage = lambda used: client.abort()  # stop after the first chunk
+        p, _ = patched([{"message": {"content": "a"}}, {"message": {"content": "b"}, "done": True}])
+        with p, self.assertRaises(ChatCancelled):
+            client.chat(tools=TOOLS)
+        self.assertEqual(client.messages[-1]["role"], "user")  # no half reply stored
+
 if __name__ == "__main__":
     unittest.main()

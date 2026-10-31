@@ -15,6 +15,11 @@ from desktop_ai_agent.core.response_format import (
 
 
 LogFn = Callable[[str], None]
+UsageFn = Callable[[int], None]
+
+
+class ChatCancelled(RuntimeError):
+    """Raised by chat() when abort() was called while the model was replying."""
 
 
 @dataclass
@@ -51,6 +56,12 @@ class ChatClient:
         # e.g. {"temperature": 0.2, "num_ctx": 8192}. None keeps Ollama's defaults.
         self.options = options
         self.messages: list[dict[str, Any]] = []
+        # Tokens the conversation fills in the model's context window.
+        # Exact after each reply (Ollama's counts), estimated while streaming.
+        self.context_used = 0
+        self.on_usage: UsageFn | None = None  # called from the streaming thread
+        self._resp: Any = None
+        self._aborted = False
         self._seed()
 
     def _seed(self) -> None:
@@ -60,6 +71,29 @@ class ChatClient:
     def clear(self) -> None:
         self.messages.clear()
         self._seed()
+        self._set_usage(0)
+
+    def abort(self) -> None:
+        """Cut the reply that is streaming right now (safe from any thread).
+
+        Closing the connection also makes Ollama stop generating.
+        """
+        self._aborted = True
+        resp = self._resp
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:  # noqa: BLE001 - already closed / mid-read
+                pass
+
+    @property
+    def context_limit(self) -> int | None:
+        return (self.options or {}).get("num_ctx")
+
+    def _set_usage(self, used: int) -> None:
+        self.context_used = used
+        if self.on_usage:
+            self.on_usage(used)
 
     def drop_images(self) -> None:
         """Remove attached images from history so a fresh screenshot can replace them."""
@@ -171,11 +205,17 @@ class ChatClient:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
+        self._aborted = False
+        start = self.context_used
+        streamed = 0
         try:
             with urllib.request.urlopen(req, timeout=600) as resp:
+                self._resp = resp
+                if self._aborted:  # abort() landed before the response existed
+                    raise ChatCancelled("stopped")
                 while True:
                     raw = resp.readline()
-                    if not raw:
+                    if not raw or self._aborted:
                         break
                     line = raw.decode("utf-8", errors="replace").strip()
                     if not line:
@@ -185,11 +225,32 @@ class ChatClient:
                         raise RuntimeError(str(data["error"]))
                     message = data.get("message") or {}
                     if message:
+                        streamed += 1  # ~1 token per streamed chunk: live estimate only
+                        self._set_usage(start + streamed)
                         yield message
                     if data.get("done"):
+                        self._record_usage(start, data)
                         break
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"Ollama chat HTTP {exc.code}: {detail}") from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"Ollama chat failed: {exc}") from exc
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            if self._aborted:
+                raise ChatCancelled("stopped") from exc
+            if isinstance(exc, urllib.error.URLError):
+                raise RuntimeError(f"Ollama chat failed: {exc}") from exc
+            raise
+        finally:
+            self._resp = None
+        if self._aborted:
+            raise ChatCancelled("stopped")
+
+    def _record_usage(self, start: int, data: dict[str, Any]) -> None:
+        prompt = data.get("prompt_eval_count")
+        reply = data.get("eval_count") or 0
+        if not isinstance(prompt, int):
+            return  # keep the streamed estimate
+        # When Ollama reuses its prompt cache, prompt_eval_count only covers the
+        # NEW tokens, so a count below what we already hold is a delta, not a total.
+        used = prompt + reply if prompt >= start else start + prompt + reply
+        self._set_usage(used)

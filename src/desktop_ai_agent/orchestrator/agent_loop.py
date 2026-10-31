@@ -9,6 +9,7 @@ Stop conditions (so a confused model can't loop forever and burn tokens):
   - user declines a high-risk step              -> "declined"
   - too many consecutive failed rounds          -> "failed"
   - too many rounds overall                     -> "max_rounds"
+  - the user pressed Stop                        -> "stopped"
 """
 from __future__ import annotations
 
@@ -20,8 +21,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from desktop_ai_agent.action.executor import Executor, StepResult, plan_from_tool_calls
+from desktop_ai_agent.core.chat_client import ChatCancelled
 
 EventFn = Callable[[str, Any], None]
+StopFn = Callable[[], bool]
+
+STOPPED_TEXT = "Stopped."
 
 # English phrasing that usually means "look at my screen". Used only to decide
 # whether to auto-capture; the screenshot tool still works for any other case.
@@ -71,7 +76,7 @@ def needs_screen_vision(text: str) -> bool:
 
 @dataclass
 class TaskResult:
-    status: str  # "done" | "declined" | "failed" | "max_rounds"
+    status: str  # "done" | "declined" | "failed" | "max_rounds" | "stopped"
     text: str
     rounds: int
 
@@ -151,8 +156,10 @@ def run_task(
     max_rounds: int = 8,
     max_failed_rounds: int = 2,
     on_event: EventFn | None = None,
+    should_stop: StopFn | None = None,
 ) -> TaskResult:
     emit: EventFn = on_event or (lambda kind, data: None)
+    stop_requested: StopFn = should_stop or (lambda: False)
     attach = list(images) if images else []
     # Auto-capture only when this request needs screen vision (not on every hello/script).
     vision = bool(attach) or (auto_screenshot and needs_screen_vision(user_text))
@@ -171,14 +178,30 @@ def run_task(
     failed_rounds = 0
     last_errors = ""
 
+    def stopped(round_no: int) -> TaskResult:
+        # Leave a note so the next request knows this one was cut short.
+        client.add_user("[The user stopped the previous request before it finished.]")
+        return TaskResult("stopped", STOPPED_TEXT, round_no)
+
     for round_no in range(1, max_rounds + 1):
-        turn = client.chat(tools=tools)
+        if stop_requested():
+            return stopped(round_no - 1)
+        try:
+            turn = client.chat(tools=tools)
+        except ChatCancelled:
+            return stopped(round_no)
         if not turn.tool_calls:
             emit("final", turn.content)
             return TaskResult("done", turn.content, round_no)
 
         plan = plan_from_tool_calls(turn.tool_calls)
         emit("plan", plan)
+        if stop_requested():
+            # Every tool call still needs an answer before the next request.
+            for step in plan:
+                name = str(step.get("name"))
+                client.add_tool_result(name, _skipped_message(name))
+            return stopped(round_no)
         results: list[StepResult] = executor.run(plan)
         by_index = {r.index: r for r in results}
 

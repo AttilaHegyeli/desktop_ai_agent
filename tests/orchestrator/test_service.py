@@ -98,5 +98,30 @@ class TestService(unittest.TestCase):
         self.assertEqual(service.client.messages, [{"role": "system", "content": SYSTEM_PROMPT}])
 
 
+
+
+class TestServiceStop(unittest.TestCase):
+    def test_stop_aborts_running_task(self):
+        gate = threading.Event()
+        turn = ChatTurn(tool_calls=[{"function": {"name": "peek", "arguments": {}}}])
+        client = FakeClient(turns=[turn], gate=gate)
+        client.abort = gate.set  # like ChatClient.abort: unblocks the stream
+        service = AgentService(client, executor())
+        done = threading.Event()
+        box = {}
+        self.assertTrue(service.submit("go", on_done=lambda r: (box.update(r=r), done.set())))
+        service.stop()
+        self.assertTrue(done.wait(5))
+        self.assertEqual(box["r"].status, "stopped")
+        self.assertFalse(service.busy)
+
+    def test_stop_when_idle_does_nothing(self):
+        AgentService(FakeClient(), executor()).stop()
+
+    def test_create_uses_8k_context(self):
+        service = AgentService.create(audit_path=None)
+        self.assertEqual(service.context_limit, 8192)
+        self.assertEqual(service.context_used, 0)
+
 if __name__ == "__main__":
     unittest.main()
