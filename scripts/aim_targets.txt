@@ -1,6 +1,9 @@
 # Aim test targets: one description per line. Blank lines and lines starting with # are ignored.
 # Replace these starters with things that are on YOUR screen right now.
 # Describe each so that only ONE thing on screen matches. Mix big and small targets.
-the Start button on the taskbar
-the clock at the bottom right of the screen
-the search box on the taskbar
+The paint taskbar icon
+the volume icon in the taskbar
+windows search inside the taskbar 
+knauf werktage
+button with sign in on it
++ button for new tab
