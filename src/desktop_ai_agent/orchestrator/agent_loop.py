@@ -60,9 +60,25 @@ _VISION_RE = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
-# Actions that can change what is on screen; mid-task vision refresh only after these.
 EMPTY_REPLY = "Done."
 
+# A final message that promises an action instead of calling the tool ("I will now type...").
+_PROMISE_RE = re.compile(
+    r"\b(i\s+will|i'll|i\s+am\s+going\s+to|i'm\s+going\s+to|next,?\s+i|now\s+i|let\s+me(?!\s+know))\b",
+    re.IGNORECASE,
+)
+NUDGE = (
+    "You said you would do something but did not call a tool. If an action is still needed, "
+    "call the tool now. Otherwise give your final answer."
+)
+
+
+def promises_action(text: str) -> bool:
+    """True when a reply announces an action ("I will now...") rather than reporting one."""
+    return bool(text and _PROMISE_RE.search(text))
+
+
+# Actions that can change what is on screen; mid-task vision refresh only after these.
 _UI_CHANGING = frozenset({"wait", "open_app", "web_open", "click"})
 
 # Large tool results that go stale: only the newest copy stays in the chat history.
@@ -190,8 +206,16 @@ def run_task(
     failed_rounds = 0
     last_errors = ""
 
+    nudged = False
+    used_tools = False
     for round_no in range(1, max_rounds + 1):
         turn = client.chat(tools=tools)
+        if not turn.tool_calls and used_tools and not nudged and promises_action(turn.content):
+            # Once per task: the model announced an action but stopped. Push it to act.
+            nudged = True
+            emit("nudge", turn.content)
+            client.add_user(NUDGE)
+            continue
         if not turn.tool_calls:
             # Small models sometimes end a task with an empty message. The UI waits for a
             # non-empty reply to stop its "thinking" dots, so never return an empty one.
@@ -199,6 +223,7 @@ def run_task(
             emit("final", text)
             return TaskResult("done", text, round_no)
 
+        used_tools = True
         plan = plan_from_tool_calls(turn.tool_calls)
         emit("plan", plan)
         results: list[StepResult] = executor.run(plan)

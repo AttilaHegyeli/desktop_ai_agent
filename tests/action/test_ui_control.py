@@ -34,6 +34,7 @@ class Case(unittest.TestCase):
         self.scans = 0
         self.pointer = (900, 500)  # where the user's mouse is before we act
         self.clicks = []
+        self.pasted = []
 
         def scan(_bounds):
             self.scans += 1
@@ -46,6 +47,8 @@ class Case(unittest.TestCase):
             mock.patch.object(ui_control, "_now", side_effect=lambda: self.now),
             mock.patch.object(ui_control, "_set_cursor", side_effect=lambda x, y: self.cursor.append((x, y))),
             mock.patch.object(ui_control, "_cursor_pos", side_effect=lambda: self.pointer),
+            mock.patch.object(ui_control, "_paste", side_effect=lambda text: self.pasted.append(
+                (self.clicks[-1] if self.clicks else None, text))),
             mock.patch.object(ui_control, "_click", side_effect=lambda button, count=1: self.clicks.append(
                 (self.cursor[-1] if self.cursor else None, button) if count == 1
                 else (self.cursor[-1], button, count))),
@@ -180,9 +183,9 @@ class TestClick(Case):
     def test_the_list_is_cleared_after_a_click(self):
         self.list_and_click()
         self.now += 2
-        with self.assertRaisesRegex(LookupError, "Call list_elements first"):
+        with self.assertRaisesRegex(LookupError, "cleared by your last click"):
             ui_control.click(3)
-        with self.assertRaisesRegex(LookupError, "Call list_elements first"):
+        with self.assertRaisesRegex(LookupError, "cleared by your last click"):
             ui_control.move_mouse(3)
         self.assertEqual(len(self.clicks), 1)
 
@@ -224,6 +227,89 @@ class TestClick(Case):
         for name in ("Paint", "Sender info", "Payment history tab", "New Tab", "Headphones: 43%", ""):
             with self.subTest(name=name):
                 self.assertIsNone(ui_control.risky_word(name))
+
+
+class TestTypeText(Case):
+    def setUp(self):
+        super().setUp()
+        self.screen += [
+            UiElement(6, "Address and search bar", "Edit", "New tab - Microsoft Edge", 200, 40, 1200, 70, EDGE),
+            UiElement(7, "Password", "Edit", "New tab - Microsoft Edge", 300, 300, 600, 330, EDGE, password=True),
+            UiElement(8, "Message body", "Document", "New tab - Microsoft Edge", 300, 400, 900, 700, EDGE),
+        ]
+        ui_control.list_elements()
+
+    def test_clicks_into_the_field_then_pastes(self):
+        result = ui_control.type_text(6, "hello wörld ✓")
+        self.assertEqual(self.pasted, [(((700, 55), "left"), "hello wörld ✓")])  # focus click first
+        self.assertEqual((result["typed_into"], result["characters"]), ("Address and search bar", 13))
+        self.assertIn("Enter was not pressed", result["note"])
+
+    def test_document_fields_work_too(self):
+        ui_control.type_text(8, "Hi")
+        self.assertEqual(self.pasted[0][1], "Hi")
+
+    def test_not_an_input_field(self):
+        with self.assertRaisesRegex(ValueError, "is a Button, not an input field"):
+            ui_control.type_text(3, "x")
+        self.assertEqual((self.clicks, self.pasted), ([], []))
+
+    def test_password_fields_are_refused(self):
+        with self.assertRaisesRegex(PermissionError, "password field"):
+            ui_control.type_text(7, "secret")
+        self.assertEqual((self.clicks, self.pasted), ([], []))
+
+    def test_empty_and_too_long_text(self):
+        with self.assertRaisesRegex(ValueError, "must not be empty"):
+            ui_control.type_text(6, "")
+        with self.assertRaisesRegex(ValueError, "too long"):
+            ui_control.type_text(6, "x" * (ui_control.MAX_TEXT + 1))
+        self.assertEqual(self.pasted, [])
+
+    def test_counts_for_the_click_rate_limit(self):
+        ui_control.type_text(6, "a")
+        ui_control.list_elements()
+        with self.assertRaisesRegex(PermissionError, "Too fast"):
+            ui_control.click(3)
+
+    def test_typing_clears_the_list(self):
+        ui_control.type_text(6, "a")
+        self.now += 2
+        with self.assertRaisesRegex(LookupError, "cleared by your last typing"):
+            ui_control.type_text(6, "b")
+        self.assertEqual(len(self.pasted), 1)
+
+    def test_click_then_type_explains_why_it_is_refused(self):
+        ui_control.click(6)
+        self.now += 2
+        with self.assertRaisesRegex(LookupError, "cleared by your last click.*Call list_elements"):
+            ui_control.type_text(6, "aaa")
+        ui_control.list_elements()  # a fresh list removes the reason
+        ui_control.type_text(6, "aaa")
+        self.assertEqual(self.pasted[-1][1], "aaa")
+
+    def test_list_says_which_window_is_in_front(self):
+        self.assertEqual(ui_control.list_elements()["window"], "New tab - Microsoft Edge")
+        self.assertNotIn("window", ui_control.list_elements("taskbar"))
+        self.foreground = None
+        self.assertIsNone(ui_control.list_elements()["window"])
+
+    def test_corner_stop_applies(self):
+        self.pointer = (0, 0)
+        with self.assertRaisesRegex(PermissionError, "emergency stop"):
+            ui_control.type_text(6, "a")
+        self.assertEqual(self.pasted, [])
+
+    def test_through_the_executor(self):
+        ex = executor_mod.default_executor()
+        self.assertEqual(ex.registry.get("type_text").risk.value, "medium")
+        (r,) = ex.run([{"name": "type_text", "arguments": {"element": 6, "text": "hi"}}])
+        self.assertEqual(r.status, "executed")
+        for args in ({"element": 6}, {"element": 6, "text": 5}, {"element": 6, "text": "x" * 2001}):
+            with self.subTest(args=args):
+                (r,) = ex.run([{"name": "type_text", "arguments": args}])
+                self.assertEqual(r.status, "rejected")
+        self.assertEqual(len(self.pasted), 1)
 
 
 class TestEmergencyStop(Case):

@@ -38,6 +38,12 @@ class TestParseElements(unittest.TestCase):
         self.assertEqual((a.id, a.name, a.type, a.app), (1, "Save file", "Button", "Paint"))
         self.assertEqual((b.id, b.app, b.center), (2, "taskbar", (1720, 1060)))
 
+    def test_password_flag_and_document_type(self):
+        a, b, c = parse_elements([row("Password", type_=50004) | {"password": True},
+                                  row("Body", type_=50030), row("Name", type_=50004) | {"password": "yes"}])
+        self.assertEqual([(e.type, e.password) for e in (a, b, c)],
+                         [("Edit", True), ("Document", False), ("Edit", False)])  # only True counts
+
     def test_control_type_ids_are_named_and_unwanted_types_dropped(self):
         els = parse_elements([row(type_=50007), row("pane", type_=50033), row("x", type_=None)])
         self.assertEqual([(e.name, e.type) for e in els], [("OK", "ListItem")])

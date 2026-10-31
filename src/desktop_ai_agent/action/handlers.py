@@ -67,6 +67,11 @@ def click(args: dict[str, Any]) -> dict[str, Any]:
     return _ui_control.click(args["element"], args.get("button", "left"), args.get("double", False))
 
 
+def type_text(args: dict[str, Any]) -> dict[str, Any]:
+    """Click into a listed input field and paste text. Never presses Enter."""
+    return _ui_control.type_text(args["element"], args["text"])
+
+
 # ---- open_app ----------------------------------------------------------------
 # The three helpers below are the only places that touch the folder index or the
 # OS, so tests can replace them and no real program is ever launched.
@@ -175,4 +180,5 @@ HANDLERS = {
     "list_elements": list_elements,
     "move_mouse": move_mouse,
     "click": click,
+    "type_text": type_text,
 }

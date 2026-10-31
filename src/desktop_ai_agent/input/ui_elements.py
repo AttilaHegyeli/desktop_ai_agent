@@ -34,6 +34,7 @@ CONTROL_TYPES = {
     50013: "RadioButton",
     50019: "TabItem",
     50024: "TreeItem",
+    50030: "Document",  # rich text areas (editors, compose boxes)
     50031: "SplitButton",
 }
 
@@ -41,7 +42,7 @@ CONTROL_TYPES = {
 _APP_ALIASES = {"Shell_TrayWnd": "taskbar", "Progman": "desktop", "WorkerW": "desktop"}
 
 # UI Automation property ids
-_NAME, _CONTROL_TYPE, _RECT, _OFFSCREEN = 30005, 30003, 30001, 30022
+_NAME, _CONTROL_TYPE, _RECT, _OFFSCREEN, _IS_PASSWORD = 30005, 30003, 30001, 30022, 30019
 
 _DESKTOP_CLASSES = frozenset({"Progman", "WorkerW"})
 
@@ -61,6 +62,7 @@ class UiElement:
     right: int
     bottom: int
     hwnd: int = 0  # its top-level window (0 = unknown); used to filter "the active window"
+    password: bool = False  # a password field: the agent never types into these
 
     @property
     def width(self) -> int:
@@ -152,7 +154,8 @@ def parse_elements(
         if key in seen:
             continue
         seen.add(key)
-        elements.append(UiElement(len(elements) + 1, name, ctype, app, left, top, right, bottom, hwnd))
+        elements.append(UiElement(len(elements) + 1, name, ctype, app, left, top, right, bottom, hwnd,
+                                  password=row.get("password") is True))
     return elements
 
 
@@ -323,7 +326,7 @@ def _collect_rows(max_elements: int) -> list[dict[str, Any]]:  # pragma: no cove
         any_type = cond if any_type is None else uia.CreateOrCondition(any_type, cond)
     cond = uia.CreateAndCondition(any_type, uia.CreatePropertyCondition(_OFFSCREEN, False))
     cache = uia.CreateCacheRequest()  # fetch all properties in one cross-process trip
-    for prop in (_NAME, _CONTROL_TYPE, _RECT):
+    for prop in (_NAME, _CONTROL_TYPE, _RECT, _IS_PASSWORD):
         cache.AddProperty(prop)
 
     rows: list[dict[str, Any]] = []
@@ -350,6 +353,7 @@ def _collect_rows(max_elements: int) -> list[dict[str, Any]]:  # pragma: no cove
                 r = el.CachedBoundingRectangle
                 rows.append({
                     "name": el.CachedName or "", "type": el.CachedControlType, "app": app, "cls": cls, "hwnd": hwnd,
+                    "password": bool(el.CachedIsPassword),
                     "left": r.left, "top": r.top, "right": r.right, "bottom": r.bottom,
                 })
             except Exception:  # noqa: BLE001

@@ -329,6 +329,19 @@ def build_default_registry() -> ActionRegistry:
                 ),
             ),
             ActionSpec(
+                name="type_text",
+                description=(
+                    "Click into an input field (Edit, ComboBox or Document element) from the "
+                    "latest list_elements result and paste text into it. It never presses Enter "
+                    "and never types into password fields."
+                ),
+                risk=Risk.MEDIUM,
+                params=(
+                    Param("element", "integer", "Input field number from the latest list_elements result", minimum=1),
+                    Param("text", "string", "The text to enter", max_length=2000),
+                ),
+            ),
+            ActionSpec(
                 name="provide_script",
                 description=(
                     "Show the user a Python script as JSON in the chat. Use it only after "
