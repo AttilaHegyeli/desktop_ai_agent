@@ -29,7 +29,10 @@ def capture_screen(
       - ``monitor`` — physical monitor ``monitor`` (1-based mss index)
       - ``region`` — rectangle ``(x, y, width, height)`` in virtual-desktop coords
 
-    Returns ``{"path", "width", "height", "scope", ...}``.
+    Returns ``{"path", "width", "height", "scope", "left", "top", "captured_at", ...}``.
+    ``left``/``top`` are the screen coordinates of the image's top-left corner (negative
+    when a monitor sits left of or above the primary one), so image pixel (x, y) is
+    screen pixel (left + x, top + y). ``captured_at`` is epoch seconds.
     Raises ``ImportError`` if mss/Pillow are missing, ``ValueError`` for bad args,
     or ``OSError`` on I/O failure.
     """
@@ -59,6 +62,8 @@ def capture_screen(
         )
         shot = sct.grab(grab)
         img_w, img_h = shot.width, shot.height
+        # Real mss always provides left/top; default to 0 so minimal fakes keep working.
+        left, top = int(grab.get("left", 0)), int(grab.get("top", 0))
         image = Image.frombytes("RGB", (img_w, img_h), shot.rgb)
 
     path = _unique_path(out_dir)
@@ -68,6 +73,9 @@ def capture_screen(
         "width": img_w,
         "height": img_h,
         "scope": scope,
+        "left": left,
+        "top": top,
+        "captured_at": round(time.time(), 3),
     }
     result.update(meta)
     return result

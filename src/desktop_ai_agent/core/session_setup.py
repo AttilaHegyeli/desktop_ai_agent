@@ -6,6 +6,7 @@ from typing import Any
 from desktop_ai_agent.core.chat_client import ChatClient
 from desktop_ai_agent.core.folder_index import ProgramCatalog
 from desktop_ai_agent.core.folder_index.tool import set_catalog, tool_usage_hint
+from desktop_ai_agent.core.monitors import Monitor, report_at_setup
 from desktop_ai_agent.core.ollama_service import OllamaService
 from desktop_ai_agent.core.subprocess_io import run_text
 from desktop_ai_agent.paths import MODELFILE, PROGRAM_FILES_INDEX_TXT
@@ -24,6 +25,7 @@ def _folder_index_config(setup: dict[str, Any]) -> dict[str, Any]:
 class SessionSetup:
     """
     Full pipeline driven only by `python -m app`:
+    0) read monitor layout and DPI scale (read-only)
     1) index usable application .exe files on configured drives
     2) ensure Ollama daemon
     3) auto-pull base model if missing
@@ -55,12 +57,16 @@ class SessionSetup:
         self.max_exe_depth = int(apps_cfg.get("max_exe_depth", 4))
         self.max_exes = int(apps_cfg.get("max_exes", 20_000))
 
+        screen_cfg = setup.get("screen") if isinstance(setup.get("screen"), dict) else {}
+        self.screen_monitor: str | int = screen_cfg.get("monitor", "primary")
+
         self.service = service or OllamaService(
             host=self.host,
             timeout_sec=int(ollama_cfg.get("startup_timeout_sec", 60)),
         )
         self.chat: ChatClient | None = None
         self.program_catalog: ProgramCatalog | None = None
+        self.monitors: list[Monitor] = []
 
     def prepare(self, log: LogFn | None = None) -> ChatClient:
         emit = log or (lambda _m: None)
@@ -69,6 +75,7 @@ class SessionSetup:
                 "Ollama is not installed or not on PATH. Install Ollama, then run: python -m app"
             )
 
+        self._detect_monitors(log=emit)
         self._build_program_index(log=emit)
 
         self.service.ensure_running(log=emit)
@@ -87,6 +94,13 @@ class SessionSetup:
         )
         emit("Agent ready — chat terminal unlocked (nothink + JSON).")
         return self.chat
+
+    def _detect_monitors(self, log: LogFn | None = None) -> None:
+        emit = log or (lambda _m: None)
+        try:
+            self.monitors = report_at_setup(emit, preference=self.screen_monitor)
+        except Exception as exc:  # noqa: BLE001 — setup continues without monitor data
+            emit(f"Monitor detection skipped (safe): {exc}")
 
     def _emit_warnings(self, emit: LogFn, warnings: list[str]) -> None:
         for message in warnings:
