@@ -14,6 +14,7 @@ from PIL import Image
 from desktop_ai_agent.input.ui_elements import (
     UiElement,
     is_visible_at,
+    is_user_window,
     match_element,
     position_label,
     find_element,
@@ -97,6 +98,16 @@ class TestHiddenFilter(unittest.TestCase):
         asked = []
         parse_elements([row(hwnd=1, rect=(10, 20, 50, 40))], root_at=lambda x, y: asked.append((x, y)))
         self.assertEqual(asked, [(30, 30)])
+
+
+class TestUserWindow(unittest.TestCase):
+    def test_skips_our_own_hidden_minimized_and_untitled_windows(self):
+        self.assertTrue(is_user_window(10, 99, True, False, 12))  # VS Code
+        self.assertFalse(is_user_window(99, 99, True, False, 12))  # our chat bar
+        self.assertFalse(is_user_window(10, 99, False, False, 12))  # hidden
+        self.assertFalse(is_user_window(10, 99, True, True, 12))  # minimized
+        self.assertFalse(is_user_window(10, 99, True, False, 0))  # untitled helper
+        self.assertTrue(is_user_window(10, None, True, False, 12))  # nothing excluded
 
 
 class TestFormatAndChoice(unittest.TestCase):

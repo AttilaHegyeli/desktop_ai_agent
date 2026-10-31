@@ -60,6 +60,7 @@ class UiElement:
     top: int
     right: int
     bottom: int
+    hwnd: int = 0  # its top-level window (0 = unknown); used to filter "the active window"
 
     @property
     def width(self) -> int:
@@ -139,8 +140,8 @@ def parse_elements(
         ):
             continue
         cls = str(row.get("cls") or "")
+        hwnd = _int(row.get("hwnd")) or 0
         if root_at is not None:
-            hwnd = _int(row.get("hwnd")) or 0
             if not is_visible_at(hwnd, cls, root_at((left + right) // 2, (top + bottom) // 2)):
                 if stats is not None:
                     stats["hidden"] += 1
@@ -151,7 +152,7 @@ def parse_elements(
         if key in seen:
             continue
         seen.add(key)
-        elements.append(UiElement(len(elements) + 1, name, ctype, app, left, top, right, bottom))
+        elements.append(UiElement(len(elements) + 1, name, ctype, app, left, top, right, bottom, hwnd))
     return elements
 
 
@@ -372,6 +373,13 @@ def _u32() -> Any:  # pragma: no cover - needs Windows
         u.WindowFromPoint.restype = wintypes.HWND
         u.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
         u.GetAncestor.restype = wintypes.HWND
+        u.GetForegroundWindow.restype = wintypes.HWND
+        u.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+        u.GetWindow.restype = wintypes.HWND
+        u.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        u.IsWindowVisible.argtypes = [wintypes.HWND]
+        u.IsIconic.argtypes = [wintypes.HWND]
+        u.GetWindowTextLengthW.argtypes = [wintypes.HWND]
         _user32 = u
     return _user32
 
@@ -395,3 +403,33 @@ def _root_window_at(x: int, y: int) -> tuple[int, str] | None:  # pragma: no cov
 
     hwnd = _u32().WindowFromPoint(wintypes.POINT(x, y))
     return _root_of(int(hwnd)) if hwnd else None
+
+
+def is_user_window(pid: int, own_pid: int | None, visible: bool, minimized: bool, title_length: int) -> bool:
+    """Is this top-level window one the user means by "the window in front"?
+
+    Skips our own windows (the chat bar is in front while the user types), hidden and
+    minimized windows, and untitled helper windows.
+    """
+    return pid != own_pid and visible and not minimized and title_length > 0
+
+
+def foreground_window(exclude_pid: int | None = None) -> tuple[int, str] | None:  # pragma: no cover
+    """(root window handle, class name) of the window in front, skipping windows of
+    process `exclude_pid` (pass os.getpid()) and walking down the z-order instead."""
+    import ctypes
+    from ctypes import wintypes
+
+    u = _u32()
+    hwnd = u.GetForegroundWindow()
+    for _ in range(500):  # z-order walk; bounded in case windows change underneath
+        if not hwnd:
+            return None
+        root = u.GetAncestor(hwnd, 2) or hwnd  # GA_ROOT
+        pid = wintypes.DWORD()
+        u.GetWindowThreadProcessId(root, ctypes.byref(pid))
+        if is_user_window(pid.value, exclude_pid, bool(u.IsWindowVisible(root)),
+                          bool(u.IsIconic(root)), u.GetWindowTextLengthW(root)):
+            return _root_of(int(root))
+        hwnd = u.GetWindow(root, 2)  # GW_HWNDNEXT: the next window below
+    return None

@@ -274,6 +274,36 @@ def build_default_registry() -> ActionRegistry:
                 ),
             ),
             ActionSpec(
+                name="list_elements",
+                description=(
+                    "List the clickable elements visible on screen (buttons, icons, menu items, "
+                    "tabs, links, text boxes) as numbered lines with name, window and rough "
+                    "position. area: active = the window in front (default), taskbar, desktop "
+                    "(desktop icons), all. Call this before move_mouse."
+                ),
+                risk=Risk.LOW,
+                params=(
+                    Param(
+                        "area",
+                        "string",
+                        "Which part of the screen to list (default active)",
+                        required=False,
+                        enum=("active", "taskbar", "desktop", "all"),
+                    ),
+                ),
+            ),
+            ActionSpec(
+                name="move_mouse",
+                description=(
+                    "Move the mouse pointer onto one element from the latest list_elements "
+                    "result, by its number. It does not click."
+                ),
+                risk=Risk.MEDIUM,
+                params=(
+                    Param("element", "integer", "Element number from the latest list_elements result", minimum=1),
+                ),
+            ),
+            ActionSpec(
                 name="provide_script",
                 description=(
                     "Show the user a Python script as JSON in the chat. Use it only after "

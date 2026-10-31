@@ -6,7 +6,9 @@ from desktop_ai_agent.orchestrator.prompts import SYSTEM_PROMPT
 
 
 # Tools named in the prompt for routing; everything else comes from the registry only.
-_NAMED_IN_PROMPT = frozenset({"provide_script", "web_search", "web_open", "screenshot"})
+_NAMED_IN_PROMPT = frozenset(
+    {"provide_script", "web_search", "web_open", "screenshot", "list_elements", "move_mouse"}
+)
 
 
 class TestSystemPrompt(unittest.TestCase):
