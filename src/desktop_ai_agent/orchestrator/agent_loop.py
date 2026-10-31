@@ -61,7 +61,18 @@ _VISION_RE = re.compile(
 )
 
 # Actions that can change what is on screen; mid-task vision refresh only after these.
-_UI_CHANGING = frozenset({"wait", "open_app", "web_open"})
+EMPTY_REPLY = "Done."
+
+_UI_CHANGING = frozenset({"wait", "open_app", "web_open", "click"})
+
+# Large tool results that go stale: only the newest copy stays in the chat history.
+_SUPERSEDED = {
+    "list_elements": json.dumps({
+        "action": "list_elements",
+        "status": "superseded",
+        "note": "Older element list removed. Its numbers are no longer valid.",
+    }),
+}
 
 
 def needs_screen_vision(text: str) -> bool:
@@ -95,6 +106,14 @@ def _drop_prior_images(client: Any) -> None:
     drop = getattr(client, "drop_images", None)
     if callable(drop):
         drop()
+
+
+def _compact_history(client: Any) -> None:
+    """Replace older copies of stale, large tool results with a short note."""
+    compact = getattr(client, "compact_tool_results", None)
+    if callable(compact):
+        for name, stub in _SUPERSEDED.items():
+            compact(name, stub)
 
 
 def _attach_screenshot_images(client: Any, results: list[StepResult]) -> None:
@@ -174,8 +193,11 @@ def run_task(
     for round_no in range(1, max_rounds + 1):
         turn = client.chat(tools=tools)
         if not turn.tool_calls:
-            emit("final", turn.content)
-            return TaskResult("done", turn.content, round_no)
+            # Small models sometimes end a task with an empty message. The UI waits for a
+            # non-empty reply to stop its "thinking" dots, so never return an empty one.
+            text = turn.content if turn.content.strip() else EMPTY_REPLY
+            emit("final", text)
+            return TaskResult("done", text, round_no)
 
         plan = plan_from_tool_calls(turn.tool_calls)
         emit("plan", plan)
@@ -189,8 +211,9 @@ def run_task(
             client.add_tool_result(name, r.to_message() if r else _skipped_message(name))
             if r:
                 emit("result", r)
+        _compact_history(client)
 
-        had_screenshot = any(r.ok and r.name == "screenshot" for r in results)
+        had_screenshot =any(r.ok and r.name == "screenshot" for r in results)
         if had_screenshot:
             vision = True
         _attach_screenshot_images(client, results)

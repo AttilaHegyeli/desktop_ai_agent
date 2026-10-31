@@ -304,6 +304,31 @@ def build_default_registry() -> ActionRegistry:
                 ),
             ),
             ActionSpec(
+                name="click",
+                description=(
+                    "Click one element from the latest list_elements result, by its number. "
+                    "Only click what the user asked for. After a click the list is cleared: "
+                    "call list_elements again before any further mouse action."
+                ),
+                risk=Risk.MEDIUM,
+                params=(
+                    Param("element", "integer", "Element number from the latest list_elements result", minimum=1),
+                    Param(
+                        "button",
+                        "string",
+                        "Mouse button (default left)",
+                        required=False,
+                        enum=("left", "right"),
+                    ),
+                    Param(
+                        "double",
+                        "boolean",
+                        "Double-click instead of a single click, e.g. to open a desktop icon (default false)",
+                        required=False,
+                    ),
+                ),
+            ),
+            ActionSpec(
                 name="provide_script",
                 description=(
                     "Show the user a Python script as JSON in the chat. Use it only after "

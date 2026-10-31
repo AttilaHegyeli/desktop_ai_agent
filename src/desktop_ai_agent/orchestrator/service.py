@@ -43,7 +43,9 @@ class AgentService:
         client = ChatClient(
             model,
             host,
-            options=options or {"temperature": 0.2, "num_ctx": 8192},
+            # 12k, not 8k: element lists + a screenshot + chat history overflowed 8k.
+            # Kept below 16k because the GPU has only 4 GB (more context = slower).
+            options=options or {"temperature": 0.2, "num_ctx": 12288},
             system=system_prompt,  # tool calls ignore the JSON format, so no need to disable it
         )
         audit = AuditLog(audit_path) if audit_path else AuditLog()

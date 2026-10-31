@@ -62,6 +62,11 @@ def move_mouse(args: dict[str, Any]) -> dict[str, Any]:
     return _ui_control.move_mouse(args["element"])
 
 
+def click(args: dict[str, Any]) -> dict[str, Any]:
+    """Pointer onto a listed element's centre, then one click."""
+    return _ui_control.click(args["element"], args.get("button", "left"), args.get("double", False))
+
+
 # ---- open_app ----------------------------------------------------------------
 # The three helpers below are the only places that touch the folder index or the
 # OS, so tests can replace them and no real program is ever launched.
@@ -169,4 +174,5 @@ HANDLERS = {
     "web_open": web_open,
     "list_elements": list_elements,
     "move_mouse": move_mouse,
+    "click": click,
 }
