@@ -20,7 +20,7 @@ from desktop_ai_agent.input.voice import (
     wake_from_setup,
 )
 from desktop_ai_agent.orchestrator.agent_loop import TaskResult
-from desktop_ai_agent.orchestrator.service import AgentService
+from desktop_ai_agent.orchestrator.service import CONTEXT_TOKENS, AgentService
 from desktop_ai_agent.output.tts import (
     Speaker,
     TtsError,
@@ -115,7 +115,10 @@ class LauncherApp:
                 on_exit=self._on_close,
                 on_config=self._open_config,
                 on_close_chat=self._on_bar_close_chat,
+                on_new_chat=self._on_new_chat,
+                on_stop=self._on_stop,
             )
+            self._bar.set_context(0, CONTEXT_TOKENS)
         return self._bar
 
     def _open_config(self) -> None:
@@ -220,6 +223,34 @@ class LauncherApp:
 
     def _set_agent(self, agent: AgentService | None) -> None:
         self._agent = agent
+        if agent is not None:
+            agent.set_usage_listener(
+                lambda used: self.root.after(0, self._on_context_usage, used)
+            )
+            self._on_context_usage(agent.context_used)
+
+    def _on_context_usage(self, used: int) -> None:
+        limit = self._agent.context_limit if self._agent is not None else CONTEXT_TOKENS
+        self._ensure_bar().set_context(used, limit)
+
+    def _on_new_chat(self) -> None:
+        if self._busy or self._agent is None or self._mic_phase != "idle":
+            return
+        if self._speaker is not None:
+            self._speaker.stop()
+        self._agent.reset()  # fires the usage listener with 0
+        self._last_user = ""
+        self._ensure_bar().reset_chat()
+        self._append_log("[ui] new chat — conversation cleared")
+
+    def _on_stop(self) -> None:
+        if self._agent is None or not self._agent.busy:
+            return
+        self._ensure_bar().set_stopping()
+        if self._speaker is not None:
+            self._speaker.stop()
+        self._append_log("[ui] stop requested")
+        self._agent.stop()
 
     def _refresh_mic_button(self) -> None:
         if not self._voice_enabled:
@@ -448,6 +479,7 @@ class LauncherApp:
         assert agent is not None
         self._last_user = text
         self._set_busy(True)
+        self._ensure_bar().set_task_running(True)
         self._ensure_bar().set_exchange(text, None)
         self._append_log(f"> {text}")
 
@@ -468,13 +500,15 @@ class LauncherApp:
                 msg = f"[{result.status}] {result.text}"
                 self.root.after(0, self._append_log, msg)
                 self.root.after(0, self._on_agent_reply, msg)
-                if result.text:
+                if result.text and result.status != "stopped":
                     self.root.after(0, self._speak, msg)
+            self.root.after(0, self._ensure_bar().set_task_running, False)
             self.root.after(0, self._set_busy, False)
 
         if not agent.submit(text, on_event=on_event, on_done=on_done):
             self._append_log("[busy] the agent is still working on the previous request")
             self._ensure_bar().status_message("Busy — wait for the previous request")
+            self._ensure_bar().set_task_running(False)
             self._set_busy(False)
 
     def _on_agent_reply(self, reply: str) -> None:

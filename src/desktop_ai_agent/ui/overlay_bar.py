@@ -25,6 +25,10 @@ _VOICE_STROKE = "#e7e7ed"
 _SEND = "#5e5ce6"
 _SEND_HI = "#4f4dcf"
 _DANGER = "#ff3b30"
+_DANGER_SOFT = "#ffe5e5"
+_DANGER_HI = "#ffd0d0"
+_WARN = "#ff9f0a"
+_METER_TRACK = "#e6e6ee"
 _NUB_FILL = "#1c1c1e"
 _NUB_STROKE = "#1c1c1e"
 _CHIP = "#ffffff"
@@ -42,6 +46,11 @@ _AI_VIEW_LINES = 6
 _AI_VIEW_PX = 108
 _TYPE_MS = 16
 _THINK_DOT_MS = 420
+_METER_W = 96
+_METER_H = 6
+_METER_MS = 16  # animation frame for the context meter fill
+_METER_WARN = 0.75
+_METER_FULL = 0.90
 
 
 def _place_icon(
@@ -69,6 +78,26 @@ def format_exchange_lines(user: str, ai: str | None) -> tuple[str, str]:
     if ai is None:
         return me, "…"
     return me, normalize_chat_reply(ai)
+
+
+def _short_tokens(n: int) -> str:
+    return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
+
+def context_meter_state(used: int, limit: int) -> tuple[float, str, str, str]:
+    """Return (fill 0..1, short label, detail label, color) for the context meter."""
+    limit = max(1, int(limit))
+    used = min(max(int(used), 0), limit)
+    frac = used / limit
+    if frac >= _METER_FULL:
+        color = _DANGER
+    elif frac >= _METER_WARN:
+        color = _WARN
+    else:
+        color = _ACCENT
+    short = f"{_short_tokens(limit - used)} left"
+    detail = f"{used:,} / {limit:,} tokens"
+    return frac, short, detail, color
 
 
 def clip_line(text: str, max_chars: int = 120) -> str:
@@ -313,6 +342,8 @@ class OverlayBar:
         on_exit: Callable[[], None] | None = None,
         on_config: Callable[[], None] | None = None,
         on_close_chat: Callable[[], None] | None = None,
+        on_new_chat: Callable[[], None] | None = None,
+        on_stop: Callable[[], None] | None = None,
     ) -> None:
         cfg = ui or {}
         # Prefer an explicit width; otherwise size from the screen so the chat
@@ -337,6 +368,8 @@ class OverlayBar:
         self._on_exit = on_exit
         self._on_config = on_config
         self._on_close_chat = on_close_chat
+        self._on_new_chat = on_new_chat
+        self._on_stop = on_stop
         self._voice_enabled = voice_enabled
 
         self._mode: BarMode = "collapsed"
@@ -355,6 +388,14 @@ class OverlayBar:
         self._type_index = 0
         self._dot_job: str | None = None
         self._dot_phase = 0
+        self._task_running = False  # Send turns into Stop while True
+        self._stopping = False
+        self._meter_used = 0
+        self._meter_limit = 1
+        self._meter_shown = 0.0  # animated fill fraction
+        self._meter_target = 0.0
+        self._meter_job: str | None = None
+        self._meter_hover = False
 
         self.win = tk.Toplevel(master)
         self.win.overrideredirect(True)
@@ -463,17 +504,46 @@ class OverlayBar:
             anchor=tk.W,
         )
         self._brand_title.pack(anchor=tk.W)
-        self._brand_subtitle = tk.Label(
-            self._brand_text,
-            text="Your personal copilot",
+        # Context meter: slim capsule + "9.2k left"; hover shows exact tokens.
+        self._meter_row = tk.Frame(self._brand_text, bg=_CARD, highlightthickness=0)
+        self._meter_row.pack(anchor=tk.W, pady=(3, 0))
+        self._meter = tk.Canvas(
+            self._meter_row,
+            width=_METER_W,
+            height=_METER_H,
+            bg=_CARD,
+            highlightthickness=0,
+            bd=0,
+        )
+        self._meter.pack(side=tk.LEFT)
+        self._meter_lbl = tk.Label(
+            self._meter_row,
+            text="",
             bg=_CARD,
             fg=_MUTED,
             font=("Segoe UI", 8),
             anchor=tk.W,
         )
-        self._brand_subtitle.pack(anchor=tk.W, pady=(1, 0))
+        self._meter_lbl.pack(side=tk.LEFT, padx=(7, 0))
+        for w in (self._meter_row, self._meter, self._meter_lbl):
+            w.bind("<Enter>", lambda _e: self._set_meter_hover(True), add="+")
+            w.bind("<Leave>", lambda _e: self._set_meter_hover(False), add="+")
+        self._draw_meter()
 
         tk.Frame(self._header, bg=_CARD).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        self.new_chat_btn = RoundButton(
+            self._header,
+            icon="new_chat",
+            icon_size=15,
+            command=self._fire_new_chat,
+            diameter=30,
+            fill=self._circle,
+            fg=_MUTED,
+            active_fill=_ACCENT_SOFT,
+            stroke=self._circle,
+        )
+        self.new_chat_btn.pack(side=tk.LEFT, padx=(0, 6))
 
         self.cfg_btn = RoundButton(
             self._header,
@@ -608,6 +678,7 @@ class OverlayBar:
         )
 
         menu = tk.Menu(self.win, tearoff=0)
+        menu.add_command(label="New chat", command=self._fire_new_chat)
         menu.add_command(label="Configuration", command=self._fire_config)
         menu.add_command(label="Close chat", command=self._fire_close_chat)
         menu.add_separator()
@@ -628,12 +699,15 @@ class OverlayBar:
             self._brand_mark,
             self._brand_text,
             self._brand_title,
-            self._brand_subtitle,
+            self._meter_row,
+            self._meter,
+            self._meter_lbl,
             self._top,
             self._prompt_icon,
             self.prompt,
             self.mic_btn,
             self.send_btn,
+            self.new_chat_btn,
             self.cfg_btn,
             self.close_btn,
         )
@@ -751,8 +825,16 @@ class OverlayBar:
         self._ph_active = True
 
     def _fire_send(self) -> None:
+        if self._task_running:
+            if not self._stopping and self._on_stop:
+                self._on_stop()
+            return
         if self._on_send:
             self._on_send()
+
+    def _fire_new_chat(self) -> None:
+        if self._ready and not self._busy and self._on_new_chat:
+            self._on_new_chat()
 
     def _fire_mic(self) -> None:
         if self._on_mic:
@@ -785,6 +867,59 @@ class OverlayBar:
         except tk.TclError:
             pass
         self._apply_mode("collapsed")
+
+    def reset_chat(self) -> None:
+        """Start fresh: clear the exchange and land on an empty composer."""
+        self._cancel_auto_hide()
+        self._cancel_typewriter()
+        self._cancel_thinking_dots()
+        self._user = ""
+        self._ai = None
+        self._me_lbl.configure(text="YOU  ·  Ready for your next task")
+        self._set_ai_text("", muted=False, follow_end=False)
+        self._apply_mode("expanded")
+        self.show()
+        self._show_placeholder()
+        self.focus_prompt()
+
+    # ---- context meter --------------------------------------------------------
+    def set_context(self, used: int, limit: int) -> None:
+        self._meter_used = used
+        self._meter_limit = limit
+        self._meter_target, _, _, _ = context_meter_state(used, limit)
+        if self._meter_job is None:
+            self._tick_meter()
+
+    def _tick_meter(self) -> None:
+        """Ease the fill toward its target so updates glide instead of jumping."""
+        self._meter_job = None
+        gap = self._meter_target - self._meter_shown
+        if abs(gap) < 0.002:
+            self._meter_shown = self._meter_target
+        else:
+            self._meter_shown += gap * 0.25
+        self._draw_meter()
+        if self._meter_shown != self._meter_target:
+            self._meter_job = self.win.after(_METER_MS, self._tick_meter)
+
+    def _set_meter_hover(self, on: bool) -> None:
+        self._meter_hover = on
+        self._draw_meter()
+
+    def _draw_meter(self) -> None:
+        _, short, detail, color = context_meter_state(self._meter_used, self._meter_limit)
+        c = self._meter
+        c.delete("all")
+        h = _METER_H
+        _round_rect(c, 0, 0, _METER_W, h, h / 2, fill=_METER_TRACK, outline="")
+        fill_w = _METER_W * self._meter_shown
+        if fill_w >= 1:
+            # Keep tiny fills a full dot so the capsule never renders as a sliver.
+            _round_rect(c, 0, 0, max(fill_w, h), h, h / 2, fill=color, outline="")
+        self._meter_lbl.configure(
+            text=detail if self._meter_hover else short,
+            fg=color if color != _ACCENT else _MUTED,
+        )
 
     def _on_ai_wheel(self, event: tk.Event) -> str:  # type: ignore[type-arg]
         """Scroll the AI reply without collapsing the bar."""
@@ -839,7 +974,8 @@ class OverlayBar:
         if self._ai is not None:
             return
         dots = "." * ((self._dot_phase % 3) + 1)
-        self._set_ai_text(f"Thinking{dots}", muted=True, follow_end=False)
+        word = "Stopping" if self._stopping else "Thinking"
+        self._set_ai_text(f"{word}{dots}", muted=True, follow_end=False)
         self._dot_phase += 1
         self._dot_job = self.win.after(_THINK_DOT_MS, self._tick_thinking_dots)
 
@@ -1090,6 +1226,9 @@ class OverlayBar:
         self._cancel_auto_hide()
         self._cancel_typewriter()
         self._cancel_thinking_dots()
+        if self._meter_job is not None:
+            self.win.after_cancel(self._meter_job)
+            self._meter_job = None
         try:
             self.win.destroy()
         except tk.TclError:
@@ -1126,6 +1265,19 @@ class OverlayBar:
             except tk.TclError:
                 pass
 
+    def set_task_running(self, running: bool) -> None:
+        """While a task runs, the Send circle becomes a red Stop control."""
+        self._task_running = running
+        self._stopping = False
+        self._refresh_controls()
+
+    def set_stopping(self) -> None:
+        self._stopping = True
+        self._refresh_controls()
+        if self._ai is None and self._dot_job is not None:
+            self._cancel_thinking_dots()
+            self._start_thinking_dots()
+
     def _chat_wraplength(self) -> int:
         return max(220, self._width - 140)
 
@@ -1157,10 +1309,26 @@ class OverlayBar:
                 self.prompt.delete(0, tk.END)
                 self._ph_active = False
             self.prompt.configure(state=tk.DISABLED, fg=_FG)
-        self.send_btn.set_style(
+        if self._task_running:
+            live = not self._stopping
+            self.send_btn.set_style(
+                icon="stop",
+                enabled=live,
+                fill=_DANGER_SOFT,
+                fg=_DANGER if live else _MUTED,
+                active_fill=_DANGER_HI if live else _DANGER_SOFT,
+            )
+        else:
+            self.send_btn.set_style(
+                icon="send",
+                enabled=ok,
+                fill=circle,
+                fg=_ACCENT if ok else _MUTED,
+                active_fill=_ACCENT_SOFT if ok else circle,
+            )
+        self.new_chat_btn.set_style(
             enabled=ok,
-            fill=circle,
-            fg=_ACCENT if ok else _MUTED,
+            fg=_MUTED,
             active_fill=_ACCENT_SOFT if ok else circle,
         )
         if self._voice_enabled and self._busy:

@@ -1,6 +1,6 @@
 import unittest
 
-from desktop_ai_agent.ui.overlay_bar import clip_line, format_exchange_lines
+from desktop_ai_agent.ui.overlay_bar import clip_line, context_meter_state, format_exchange_lines
 
 
 class TestFormatExchangeLines(unittest.TestCase):
@@ -43,6 +43,21 @@ class TestClipLine(unittest.TestCase):
         self.assertEqual(len(out), 20)
         self.assertTrue(out.endswith("…"))
 
+
+class TestContextMeterState(unittest.TestCase):
+    def test_empty_context(self):
+        frac, short, detail, color = context_meter_state(0, 8192)
+        self.assertEqual((frac, short, detail), (0.0, "8.2k left", "0 / 8,192 tokens"))
+        self.assertEqual(color, "#5e5ce6")
+
+    def test_colors_shift_with_usage(self):
+        self.assertEqual(context_meter_state(6200, 8192)[3], "#ff9f0a")  # > 75 %
+        self.assertEqual(context_meter_state(7500, 8192)[3], "#ff3b30")  # > 90 %
+
+    def test_small_remainder_and_clamping(self):
+        self.assertEqual(context_meter_state(8000, 8192)[1], "192 left")
+        frac, short, _, _ = context_meter_state(99999, 8192)
+        self.assertEqual((frac, short), (1.0, "0 left"))
 
 if __name__ == "__main__":
     unittest.main()
