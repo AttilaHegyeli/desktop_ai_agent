@@ -51,14 +51,13 @@ def _install_fake_capture_modules(
     return image_mock, sct
 
 
-def _clear_fake_modules() -> None:
-    for key in ("mss", "PIL", "PIL.Image"):
-        sys.modules.pop(key, None)
-
-
 class TestCaptureScreen(unittest.TestCase):
-    def tearDown(self) -> None:
-        _clear_fake_modules()
+    def setUp(self) -> None:
+        # Restore the real modules afterwards. Just popping them makes the next
+        # `import PIL.Image` load a second copy that has no format plugins (.png).
+        patcher = patch.dict(sys.modules)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_default_captures_primary_monitor(self):
         from desktop_ai_agent.action.tools.screenshot import capture_screen

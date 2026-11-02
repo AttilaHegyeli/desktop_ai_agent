@@ -34,4 +34,6 @@ def format_event(kind: str, data: Any) -> str:
         return f"{data}\n"
     if kind == "screenshot":
         return f"[screenshot] {data}\n"
+    if kind == "nudge":
+        return f"[nudge] model announced an action without doing it: {_clip(data)}\n"
     return ""

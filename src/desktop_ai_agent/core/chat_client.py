@@ -66,6 +66,21 @@ class ChatClient:
         for msg in self.messages:
             msg.pop("images", None)
 
+    def compact_tool_results(self, tool_name: str, stub: str, keep_last: int = 1) -> int:
+        """Replace all but the newest `keep_last` results of `tool_name` with `stub`.
+
+        For tool results that go stale and are large (an on-screen element list), so
+        old copies stop filling the context window. Returns how many were replaced.
+        """
+        matches = [m for m in self.messages if m.get("role") == "tool" and m.get("tool_name") == tool_name]
+        old = matches[: max(0, len(matches) - keep_last)]
+        replaced = 0
+        for msg in old:
+            if msg.get("content") != stub:
+                msg["content"] = stub
+                replaced += 1
+        return replaced
+
     # ---- plain text chat (the original JSON scriptwriter path) --------------
     def ask(self, user_text: str) -> str:
         self.messages.append({"role": "user", "content": user_text})

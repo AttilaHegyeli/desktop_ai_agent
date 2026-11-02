@@ -274,6 +274,74 @@ def build_default_registry() -> ActionRegistry:
                 ),
             ),
             ActionSpec(
+                name="list_elements",
+                description=(
+                    "List the clickable elements visible on screen (buttons, icons, menu items, "
+                    "tabs, links, text boxes) as numbered lines with name, window and rough "
+                    "position. area: active = the window in front (default), taskbar, desktop "
+                    "(desktop icons), all. Call this before move_mouse."
+                ),
+                risk=Risk.LOW,
+                params=(
+                    Param(
+                        "area",
+                        "string",
+                        "Which part of the screen to list (default active)",
+                        required=False,
+                        enum=("active", "taskbar", "desktop", "all"),
+                    ),
+                ),
+            ),
+            ActionSpec(
+                name="move_mouse",
+                description=(
+                    "Move the mouse pointer onto one element from the latest list_elements "
+                    "result, by its number. It does not click."
+                ),
+                risk=Risk.MEDIUM,
+                params=(
+                    Param("element", "integer", "Element number from the latest list_elements result", minimum=1),
+                ),
+            ),
+            ActionSpec(
+                name="click",
+                description=(
+                    "Click one element from the latest list_elements result, by its number. "
+                    "Only click what the user asked for. After a click the list is cleared: "
+                    "call list_elements again before any further mouse action."
+                ),
+                risk=Risk.MEDIUM,
+                params=(
+                    Param("element", "integer", "Element number from the latest list_elements result", minimum=1),
+                    Param(
+                        "button",
+                        "string",
+                        "Mouse button (default left)",
+                        required=False,
+                        enum=("left", "right"),
+                    ),
+                    Param(
+                        "double",
+                        "boolean",
+                        "Double-click instead of a single click, e.g. to open a desktop icon (default false)",
+                        required=False,
+                    ),
+                ),
+            ),
+            ActionSpec(
+                name="type_text",
+                description=(
+                    "Click into an input field (Edit, ComboBox or Document element) from the "
+                    "latest list_elements result and paste text into it. It never presses Enter "
+                    "and never types into password fields."
+                ),
+                risk=Risk.MEDIUM,
+                params=(
+                    Param("element", "integer", "Input field number from the latest list_elements result", minimum=1),
+                    Param("text", "string", "The text to enter", max_length=2000),
+                ),
+            ),
+            ActionSpec(
                 name="provide_script",
                 description=(
                     "Show the user a Python script as JSON in the chat. Use it only after "
