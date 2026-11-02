@@ -65,8 +65,35 @@ _VISION_RE = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+EMPTY_REPLY = "Done."
+
+# A final message that promises an action instead of calling the tool ("I will now type...").
+_PROMISE_RE = re.compile(
+    r"\b(i\s+will|i'll|i\s+am\s+going\s+to|i'm\s+going\s+to|next,?\s+i|now\s+i|let\s+me(?!\s+know))\b",
+    re.IGNORECASE,
+)
+NUDGE = (
+    "You said you would do something but did not call a tool. If an action is still needed, "
+    "call the tool now. Otherwise give your final answer."
+)
+
+
+def promises_action(text: str) -> bool:
+    """True when a reply announces an action ("I will now...") rather than reporting one."""
+    return bool(text and _PROMISE_RE.search(text))
+
+
 # Actions that can change what is on screen; mid-task vision refresh only after these.
-_UI_CHANGING = frozenset({"wait", "open_app", "web_open"})
+_UI_CHANGING = frozenset({"wait", "open_app", "web_open", "click"})
+
+# Large tool results that go stale: only the newest copy stays in the chat history.
+_SUPERSEDED = {
+    "list_elements": json.dumps({
+        "action": "list_elements",
+        "status": "superseded",
+        "note": "Older element list removed. Its numbers are no longer valid.",
+    }),
+}
 
 
 def needs_screen_vision(text: str) -> bool:
@@ -100,6 +127,14 @@ def _drop_prior_images(client: Any) -> None:
     drop = getattr(client, "drop_images", None)
     if callable(drop):
         drop()
+
+
+def _compact_history(client: Any) -> None:
+    """Replace older copies of stale, large tool results with a short note."""
+    compact = getattr(client, "compact_tool_results", None)
+    if callable(compact):
+        for name, stub in _SUPERSEDED.items():
+            compact(name, stub)
 
 
 def _attach_screenshot_images(client: Any, results: list[StepResult]) -> None:
@@ -178,6 +213,9 @@ def run_task(
     failed_rounds = 0
     last_errors = ""
 
+ nudged = False
+    used_tools = False
+
     def stopped(round_no: int) -> TaskResult:
         # Leave a note so the next request knows this one was cut short.
         client.add_user("[The user stopped the previous request before it finished.]")
@@ -190,10 +228,20 @@ def run_task(
             turn = client.chat(tools=tools)
         except ChatCancelled:
             return stopped(round_no)
+        if not turn.tool_calls and used_tools and not nudged and promises_action(turn.content):
+            # Once per task: the model announced an action but stopped. Push it to act.
+            nudged = True
+            emit("nudge", turn.content)
+            client.add_user(NUDGE)
+            continue
         if not turn.tool_calls:
-            emit("final", turn.content)
-            return TaskResult("done", turn.content, round_no)
+            # Small models sometimes end a task with an empty message. The UI waits for a
+            # non-empty reply to stop its "thinking" dots, so never return an empty one.
+            text = turn.content if turn.content.strip() else EMPTY_REPLY
+            emit("final", text)
+            return TaskResult("done", text, round_no)
 
+        used_tools = True
         plan = plan_from_tool_calls(turn.tool_calls)
         emit("plan", plan)
         if stop_requested():
@@ -212,8 +260,9 @@ def run_task(
             client.add_tool_result(name, r.to_message() if r else _skipped_message(name))
             if r:
                 emit("result", r)
+        _compact_history(client)
 
-        had_screenshot = any(r.ok and r.name == "screenshot" for r in results)
+        had_screenshot =any(r.ok and r.name == "screenshot" for r in results)
         if had_screenshot:
             vision = True
         _attach_screenshot_images(client, results)

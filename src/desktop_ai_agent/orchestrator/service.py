@@ -47,6 +47,7 @@ class AgentService:
             model,
             host,
             options=options or {"temperature": 0.2, "num_ctx": CONTEXT_TOKENS},
+
             system=system_prompt,  # tool calls ignore the JSON format, so no need to disable it
         )
         audit = AuditLog(audit_path) if audit_path else AuditLog()

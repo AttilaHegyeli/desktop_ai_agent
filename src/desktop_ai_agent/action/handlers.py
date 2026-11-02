@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from desktop_ai_agent.action.tools import ui_control as _ui_control
 from desktop_ai_agent.action.tools.screenshot import capture_screen
 from desktop_ai_agent.action.tools.web_open import open_url as _open_url
 from desktop_ai_agent.action.tools.web_search import search_web as _search_web
@@ -49,6 +50,26 @@ def web_search(args: dict[str, Any]) -> dict[str, Any]:
 def web_open(args: dict[str, Any]) -> dict[str, Any]:
     """Open an http(s) URL in the user's default browser."""
     return _open_url(args["url"])
+
+
+def list_elements(args: dict[str, Any]) -> dict[str, Any]:
+    """Numbered list of visible clickable elements (UI Automation)."""
+    return _ui_control.list_elements(args.get("area", "active"))
+
+
+def move_mouse(args: dict[str, Any]) -> dict[str, Any]:
+    """Pointer onto a listed element's centre. Never clicks."""
+    return _ui_control.move_mouse(args["element"])
+
+
+def click(args: dict[str, Any]) -> dict[str, Any]:
+    """Pointer onto a listed element's centre, then one click."""
+    return _ui_control.click(args["element"], args.get("button", "left"), args.get("double", False))
+
+
+def type_text(args: dict[str, Any]) -> dict[str, Any]:
+    """Click into a listed input field and paste text. Never presses Enter."""
+    return _ui_control.type_text(args["element"], args["text"])
 
 
 # ---- open_app ----------------------------------------------------------------
@@ -156,4 +177,8 @@ HANDLERS = {
     "open_app": open_app,
     "web_search": web_search,
     "web_open": web_open,
+    "list_elements": list_elements,
+    "move_mouse": move_mouse,
+    "click": click,
+    "type_text": type_text,
 }
