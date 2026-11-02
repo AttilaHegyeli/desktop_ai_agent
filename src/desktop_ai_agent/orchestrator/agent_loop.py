@@ -22,6 +22,7 @@ from typing import Any, Callable
 
 from desktop_ai_agent.action.executor import Executor, StepResult, plan_from_tool_calls
 from desktop_ai_agent.core.chat_client import ChatCancelled
+from desktop_ai_agent.orchestrator.task_state import TaskState
 
 EventFn = Callable[[str, Any], None]
 StopFn = Callable[[], bool]
@@ -181,20 +182,15 @@ def _capture_b64(executor: Executor, emit: EventFn) -> str | None:
         return None
 
 
-def run_task(
-    client: Any,  # core.chat_client.ChatClient (anything with add_user/chat/add_tool_result)
+def _start_task(
+    client: Any,
     executor: Executor,
     user_text: str,
-    *,
-    images: list[str] | None = None,
-    auto_screenshot: bool = True,
-    max_rounds: int = 8,
-    max_failed_rounds: int = 2,
-    on_event: EventFn | None = None,
-    should_stop: StopFn | None = None,
-) -> TaskResult:
-    emit: EventFn = on_event or (lambda kind, data: None)
-    stop_requested: StopFn = should_stop or (lambda: False)
+    images: list[str] | None,
+    auto_screenshot: bool,
+    emit: EventFn,
+) -> TaskState:
+    """Add the user's request to the chat, with a screenshot when it needs vision."""
     attach = list(images) if images else []
     # Auto-capture only when this request needs screen vision (not on every hello/script).
     vision = bool(attach) or (auto_screenshot and needs_screen_vision(user_text))
@@ -209,90 +205,168 @@ def run_task(
     if attach:
         _drop_prior_images(client)
     client.add_user(user_text, attach or None)
+    return TaskState(user_text, vision=vision)
+
+
+def _stopped(client: Any, round_no: int) -> TaskResult:
+    # Leave a note so the next request knows this one was cut short.
+    client.add_user("[The user stopped the previous request before it finished.]")
+    return TaskResult("stopped", STOPPED_TEXT, round_no)
+
+
+def _should_nudge(state: TaskState, turn: Any) -> bool:
+    """Once per task: the model announced an action but stopped without a tool call."""
+    return (
+        not turn.tool_calls
+        and state.used_tools
+        and not state.nudged
+        and promises_action(turn.content)
+    )
+
+
+def _final_answer(turn: Any, round_no: int, emit: EventFn) -> TaskResult:
+    # Small models sometimes end a task with an empty message. The UI waits for a
+    # non-empty reply to stop its "thinking" dots, so never return an empty one.
+    text = turn.content if turn.content.strip() else EMPTY_REPLY
+    emit("final", text)
+    return TaskResult("done", text, round_no)
+
+
+def _skip_plan(client: Any, plan: list[dict[str, Any]]) -> None:
+    """Every tool call still needs an answer before the next request."""
+    for step in plan:
+        name = str(step.get("name"))
+        client.add_tool_result(name, _skipped_message(name))
+
+
+def _report_results(
+    client: Any, plan: list[dict[str, Any]], results: list[StepResult], emit: EventFn
+) -> None:
+    """Every tool call must get a tool message back, run or not."""
+    by_index = {r.index: r for r in results}
+    for i, step in enumerate(plan):
+        name = str(step.get("name"))
+        r = by_index.get(i)
+        client.add_tool_result(name, r.to_message() if r else _skipped_message(name))
+        if r:
+            emit("result", r)
+    _compact_history(client)
+
+
+def _ends_turn_text(executor: Executor, results: list[StepResult]) -> str | None:
+    """An action flagged ends_turn (e.g. provide_script) IS the final reply."""
+    finals = [r for r in results if executor.registry.get(r.name).ends_turn]
+    if not finals:
+        return None
+    return json.dumps(finals[-1].output, ensure_ascii=False)  # compact, one line
+
+
+def _refresh_screen(client: Any, executor: Executor, emit: EventFn) -> None:
+    b64 = _capture_b64(executor, emit)
+    if b64:
+        _drop_prior_images(client)
+        client.add_user("Current screen.", images=[b64])
+        emit("screenshot", "auto")
+
+
+def _run_round(
+    client: Any,
+    executor: Executor,
+    state: TaskState,
+    turn: Any,
+    *,
+    auto_screenshot: bool,
+    max_failed_rounds: int,
+    emit: EventFn,
+    stop_requested: StopFn,
+) -> TaskResult | None:
+    """Run the model's tool calls. Returns a TaskResult when the task ends, else None."""
+    state.used_tools = True
+    plan = plan_from_tool_calls(turn.tool_calls)
+    emit("plan", plan)
+    if stop_requested():
+        _skip_plan(client, plan)
+        return _stopped(client, state.round_no)
+    results: list[StepResult] = executor.run(plan)
+    _report_results(client, plan, results, emit)
+
+    had_screenshot = any(r.ok and r.name == "screenshot" for r in results)
+    if had_screenshot:
+        state.vision = True
+    _attach_screenshot_images(client, results)
+
+    if any(r.status == "declined" for r in results):
+        return TaskResult(
+            "declined", "A step needed your approval and was not approved.", state.round_no
+        )
+
+    if len(results) == len(plan) and all(r.ok for r in results):
+        # Stop on an ends_turn action instead of asking the model to comment on it again.
+        text = _ends_turn_text(executor, results)
+        if text is not None:
+            emit("final", text)
+            return TaskResult("done", text, state.round_no)
+        state.failed_rounds = 0
+        # Mid-task refresh only while this task is already using vision, the
+        # plan did not just capture, and a UI-changing action ran.
+        ui_changed = any(r.ok and r.name in _UI_CHANGING for r in results)
+        if auto_screenshot and state.vision and not had_screenshot and ui_changed:
+            _refresh_screen(client, executor, emit)
+        return None
+
+    state.failed_rounds += 1
+    state.last_errors = "; ".join(r.error or r.status for r in results if not r.ok)
+    if state.failed_rounds > max_failed_rounds:
+        return TaskResult(
+            "failed", f"Gave up after repeated failures: {state.last_errors}", state.round_no
+        )
+    return None
+
+
+def run_task(
+    client: Any,  # core.chat_client.ChatClient (anything with add_user/chat/add_tool_result)
+    executor: Executor,
+    user_text: str,
+    *,
+    images: list[str] | None = None,
+    auto_screenshot: bool = True,
+    max_rounds: int = 8,
+    max_failed_rounds: int = 2,
+    on_event: EventFn | None = None,
+    should_stop: StopFn | None = None,
+) -> TaskResult:
+    emit: EventFn = on_event or (lambda kind, data: None)
+    stop_requested: StopFn = should_stop or (lambda: False)
+    state = _start_task(client, executor, user_text, images, auto_screenshot, emit)
     tools = executor.registry.to_tools()  # what the model sees == what we enforce
-    failed_rounds = 0
-    last_errors = ""
-
- nudged = False
-    used_tools = False
-
-    def stopped(round_no: int) -> TaskResult:
-        # Leave a note so the next request knows this one was cut short.
-        client.add_user("[The user stopped the previous request before it finished.]")
-        return TaskResult("stopped", STOPPED_TEXT, round_no)
 
     for round_no in range(1, max_rounds + 1):
+        state.round_no = round_no
         if stop_requested():
-            return stopped(round_no - 1)
+            return _stopped(client, round_no - 1)
         try:
             turn = client.chat(tools=tools)
         except ChatCancelled:
-            return stopped(round_no)
-        if not turn.tool_calls and used_tools and not nudged and promises_action(turn.content):
-            # Once per task: the model announced an action but stopped. Push it to act.
-            nudged = True
+            return _stopped(client, round_no)
+        if _should_nudge(state, turn):
+            state.nudged = True
             emit("nudge", turn.content)
             client.add_user(NUDGE)
             continue
         if not turn.tool_calls:
-            # Small models sometimes end a task with an empty message. The UI waits for a
-            # non-empty reply to stop its "thinking" dots, so never return an empty one.
-            text = turn.content if turn.content.strip() else EMPTY_REPLY
-            emit("final", text)
-            return TaskResult("done", text, round_no)
+            return _final_answer(turn, round_no, emit)
 
-        used_tools = True
-        plan = plan_from_tool_calls(turn.tool_calls)
-        emit("plan", plan)
-        if stop_requested():
-            # Every tool call still needs an answer before the next request.
-            for step in plan:
-                name = str(step.get("name"))
-                client.add_tool_result(name, _skipped_message(name))
-            return stopped(round_no)
-        results: list[StepResult] = executor.run(plan)
-        by_index = {r.index: r for r in results}
-
-        # Every tool call must get a tool message back, run or not.
-        for i, step in enumerate(plan):
-            name = str(step.get("name"))
-            r = by_index.get(i)
-            client.add_tool_result(name, r.to_message() if r else _skipped_message(name))
-            if r:
-                emit("result", r)
-        _compact_history(client)
-
-        had_screenshot =any(r.ok and r.name == "screenshot" for r in results)
-        if had_screenshot:
-            vision = True
-        _attach_screenshot_images(client, results)
-
-        if any(r.status == "declined" for r in results):
-            return TaskResult("declined", "A step needed your approval and was not approved.", round_no)
-
-        if len(results) == len(plan) and all(r.ok for r in results):
-            # An action flagged ends_turn (e.g. provide_script) IS the final reply:
-            # stop here instead of asking the model to comment on it again.
-            finals = [r for r in results if executor.registry.get(r.name).ends_turn]
-            if finals:
-                text = json.dumps(finals[-1].output, ensure_ascii=False)  # compact, one line
-                emit("final", text)
-                return TaskResult("done", text, round_no)
-            failed_rounds = 0
-            # Mid-task refresh only while this task is already using vision, the
-            # plan did not just capture, and a UI-changing action ran.
-            ui_changed = any(r.ok and r.name in _UI_CHANGING for r in results)
-            if auto_screenshot and vision and not had_screenshot and ui_changed:
-                b64 = _capture_b64(executor, emit)
-                if b64:
-                    _drop_prior_images(client)
-                    client.add_user("Current screen.", images=[b64])
-                    emit("screenshot", "auto")
-            continue
-
-        failed_rounds += 1
-        last_errors = "; ".join(r.error or r.status for r in results if not r.ok)
-        if failed_rounds > max_failed_rounds:
-            return TaskResult("failed", f"Gave up after repeated failures: {last_errors}", round_no)
+        result = _run_round(
+            client,
+            executor,
+            state,
+            turn,
+            auto_screenshot=auto_screenshot,
+            max_failed_rounds=max_failed_rounds,
+            emit=emit,
+            stop_requested=stop_requested,
+        )
+        if result is not None:
+            return result
 
     return TaskResult("max_rounds", f"Stopped after {max_rounds} rounds.", max_rounds)
