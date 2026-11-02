@@ -32,6 +32,13 @@ class TestFormatEvent(unittest.TestCase):
     def test_auto_screenshot_line(self):
         self.assertEqual(format_event("screenshot", "auto"), "[screenshot] auto\n")
 
+    def test_orchestrator_lines(self):
+        steps = [{"name": "list_elements", "arguments": {"area": "active"}}]
+        self.assertEqual(format_event("follow_up", steps), "[auto] list_elements(area='active')\n")
+        self.assertIn("click(", format_event("stuck", ['click({"element": 3})']))
+        self.assertIn("fresh chat (#1)", format_event("handoff", 1))
+        self.assertIn("call:wait{seconds:5}", format_event("recovered", "call:wait{seconds:5}<tool_call|>"))
+
 
 if __name__ == "__main__":
     unittest.main()

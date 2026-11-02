@@ -45,6 +45,19 @@ class TestPromisesAction(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertFalse(promises_action(text))
 
+    def test_offers_and_questions_are_not_pushed(self):
+        for text in ("I will click Pause. Is that what you want?",
+                     "I can click Play. Do you want me to?",
+                     "I'll open it if you like. Should I?",
+                     "Let me know: shall I click Save",
+                     "I will click it, would you like that"):
+            with self.subTest(text=text):
+                self.assertFalse(promises_action(text))
+
+    def test_nudge_only_allows_requested_actions(self):
+        self.assertIn("only if the user asked", NUDGE)
+        self.assertIn("Do not take actions the user did not ask for", NUDGE)
+
 
 class TestNudge(unittest.TestCase):
     def test_announce_after_tools_gets_one_nudge_then_acts(self):
@@ -69,6 +82,14 @@ class TestNudge(unittest.TestCase):
         client = Client([ChatTurn(content="I will need more details. Which folder?")])
         res = run_task(client, ex, "go", auto_screenshot=False)
         self.assertEqual(res.text, "I will need more details. Which folder?")
+        self.assertNotIn(NUDGE, client.user)
+
+    def test_no_nudge_when_the_model_asks_first(self):
+        ex, ran = executor()
+        client = Client([peek(), ChatTurn(content="I will click Pause. Do you want me to do that?")])
+        res = run_task(client, ex, "s case", auto_screenshot=False)
+        self.assertEqual((res.status, res.rounds), ("done", 2))
+        self.assertEqual(len(ran), 1)  # only the peek, no pushed action
         self.assertNotIn(NUDGE, client.user)
 
     def test_no_nudge_for_a_plain_report(self):
