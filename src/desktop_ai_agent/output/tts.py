@@ -171,12 +171,37 @@ class Speaker:
             return
         if len(cleaned) > MAX_SPEAK_CHARS:
             cleaned = cleaned[:MAX_SPEAK_CHARS] + "..."
+        # A prior interrupt() must not permanently mute later speak() calls.
+        self._stop_playback.clear()
         self._ensure_worker()
         self._q.put((cleaned, on_done))
 
     def speak_wake_ack(self, *, on_done: DoneFn | None = None) -> None:
         """Speak the configured wake acknowledgement phrase."""
         self.speak(self.wake_ack, on_done=on_done)
+
+    def interrupt(self) -> None:
+        """Cancel current/queued speech without blocking or killing the worker.
+
+        Safe to call from the UI thread (e.g. New chat / Stop). Unlike ``stop``,
+        this never ``join``s — so the overlay cannot freeze waiting on audio.
+        """
+        self._stop_playback.set()
+        while True:
+            try:
+                item = self._q.get_nowait()
+            except queue.Empty:
+                break
+            if item is None:
+                # Preserve a shutdown sentinel from a concurrent stop().
+                self._q.put(None)
+                break
+            _text, on_done = item
+            if on_done is not None:
+                try:
+                    on_done()
+                except Exception:  # noqa: BLE001
+                    pass
 
     def stop(self) -> None:
         """Stop the worker after draining; safe to call on app exit."""
@@ -269,6 +294,8 @@ class Speaker:
         """Classic Windows SAPI. Fresh engine per utterance (reuse goes silent)."""
         import pyttsx3
 
+        if self._stop_playback.is_set():
+            return
         engine = pyttsx3.init()
         try:
             try:
@@ -278,6 +305,8 @@ class Speaker:
             engine.setProperty("volume", self.volume)
             if self.voice:
                 self._select_sapi_voice(engine, self.voice)
+            if self._stop_playback.is_set():
+                return
             engine.say(text)
             engine.runAndWait()
         finally:

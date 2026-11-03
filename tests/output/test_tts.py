@@ -189,6 +189,27 @@ class TestSpeaker(unittest.TestCase):
             sp.speak_wake_ack()
             speak.assert_called_once_with("yes my lord?", on_done=None)
 
+    def test_interrupt_drains_queue_without_joining(self):
+        sp = Speaker(engine="sapi")
+        done = MagicMock()
+        with patch.object(sp, "_ensure_worker"):
+            sp._q.put(("queued line", done))
+            sp.interrupt()
+        self.assertTrue(sp._stop_playback.is_set())
+        self.assertTrue(sp._q.empty())
+        done.assert_called_once_with()
+        # Worker slot untouched — interrupt must not join/kill like stop().
+        self.assertIsNone(sp._worker)
+
+    def test_speak_after_interrupt_clears_stop_flag(self):
+        sp = Speaker(engine="sapi")
+        sp._stop_playback.set()
+        with patch.object(sp, "_ensure_worker"):
+            sp.speak("hello again")
+            text, _cb = sp._q.get_nowait()
+        self.assertEqual(text, "hello again")
+        self.assertFalse(sp._stop_playback.is_set())
+
     def test_edge_rate_helper(self):
         self.assertEqual(tts_mod._edge_rate("+10%"), "+10%")
         self.assertEqual(tts_mod._edge_rate(180), "+0%")

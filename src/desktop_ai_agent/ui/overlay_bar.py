@@ -766,10 +766,27 @@ class OverlayBar:
                 keep=self._icon_keep,
             )
 
-    def _on_prompt_key(self, _event: tk.Event) -> str | None:  # type: ignore[type-arg]
-        """Block typing while the model is running."""
+    def _on_prompt_key(self, event: tk.Event) -> str | None:  # type: ignore[type-arg]
+        """Block typing while the model is running; clear ghost placeholder on first key."""
         if self._busy or not self._ready:
             return "break"
+        if self._ph_active:
+            # Pure modifiers must not wipe the ghost text.
+            if event.keysym in (
+                "Shift_L",
+                "Shift_R",
+                "Control_L",
+                "Control_R",
+                "Alt_L",
+                "Alt_R",
+                "Caps_Lock",
+            ):
+                return None
+            self._clear_placeholder()
+            # Backspace/Delete on ghost text should leave an empty field, not
+            # eat a character that was never real user input.
+            if event.keysym in ("BackSpace", "Delete"):
+                return "break"
         return None
 
     def _history_step(self, delta: int) -> str:
@@ -818,7 +835,22 @@ class OverlayBar:
         if self._ready and not self._busy and not self.prompt.get().strip():
             self._show_placeholder()
 
+    def _prompt_has_focus(self) -> bool:
+        try:
+            return self.win.focus_get() == self.prompt
+        except tk.TclError:
+            return False
+
     def _show_placeholder(self) -> None:
+        # If the entry already has focus (common after New chat — canvas
+        # buttons often do not steal focus), inserting ghost text would make
+        # the next keystrokes append to "Ask anything…". Leave a real empty
+        # field ready to type instead.
+        if self._prompt_has_focus():
+            self.prompt.configure(state=tk.NORMAL, fg=_FG)
+            self.prompt.delete(0, tk.END)
+            self._ph_active = False
+            return
         self.prompt.configure(state=tk.NORMAL, fg=_PLACEHOLDER)
         self.prompt.delete(0, tk.END)
         self.prompt.insert(0, self._placeholder)
@@ -877,10 +909,19 @@ class OverlayBar:
         self._ai = None
         self._me_lbl.configure(text="YOU  ·  Ready for your next task")
         self._set_ai_text("", muted=False, follow_end=False)
-        self._apply_mode("expanded")
+        # Avoid a double layout pass: show() re-applies the current mode.
+        self._mode = "expanded"
         self.show()
-        self._show_placeholder()
+        # Focus first, then decide placeholder vs empty field. Showing the
+        # ghost text while already focused is what made New chat "type into
+        # the background".
         self.focus_prompt()
+        if self._prompt_has_focus():
+            self.prompt.configure(state=tk.NORMAL, fg=_FG)
+            self.prompt.delete(0, tk.END)
+            self._ph_active = False
+        else:
+            self._show_placeholder()
 
     # ---- context meter --------------------------------------------------------
     def set_context(self, used: int, limit: int) -> None:
@@ -1238,10 +1279,15 @@ class OverlayBar:
         self._ready = ready
         self._refresh_controls()
         if ready:
+            self._mode = "expanded"
             self.show()
-            self._apply_mode("expanded")
-            self._show_placeholder()
             self.focus_prompt()
+            if self._prompt_has_focus():
+                self.prompt.configure(state=tk.NORMAL, fg=_FG)
+                self.prompt.delete(0, tk.END)
+                self._ph_active = False
+            else:
+                self._show_placeholder()
             self.win.after(4000, self._idle_intro_collapse)
         else:
             self.hide()

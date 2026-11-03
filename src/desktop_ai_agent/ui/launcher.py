@@ -237,7 +237,8 @@ class LauncherApp:
         if self._busy or self._agent is None or self._mic_phase != "idle":
             return
         if self._speaker is not None:
-            self._speaker.stop()
+            # Never join the TTS worker on the UI thread — that freezes the overlay.
+            self._speaker.interrupt()
         self._agent.reset()  # fires the usage listener with 0
         self._last_user = ""
         self._ensure_bar().reset_chat()
@@ -248,7 +249,7 @@ class LauncherApp:
             return
         self._ensure_bar().set_stopping()
         if self._speaker is not None:
-            self._speaker.stop()
+            self._speaker.interrupt()
         self._append_log("[ui] stop requested")
         self._agent.stop()
 
