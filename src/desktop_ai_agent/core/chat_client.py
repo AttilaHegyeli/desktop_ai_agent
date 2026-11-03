@@ -152,6 +152,28 @@ class ChatClient:
         """Feed an executor result (or rejection reason) back to the model."""
         self.messages.append({"role": "tool", "tool_name": tool_name, "content": content})
 
+    def add_auto_tool_calls(self, calls: list[dict[str, Any]]) -> None:
+        """Append tool calls the orchestrator ran itself to the latest assistant message.
+
+        Their results are then normal tool messages that answer a call in the history,
+        so they are compacted like any other tool result.
+        """
+        for msg in reversed(self.messages):
+            if msg.get("role") == "assistant":
+                msg["tool_calls"] = list(msg.get("tool_calls") or []) + list(calls)
+                return
+
+    def recover_tool_calls(self, calls: list[dict[str, Any]]) -> None:
+        """The latest reply wrote its tool calls as text: store them as real calls instead.
+
+        The text is cleared so the model does not learn to repeat the broken format.
+        """
+        for msg in reversed(self.messages):
+            if msg.get("role") == "assistant":
+                msg["content"] = ""
+                msg["tool_calls"] = list(calls)
+                return
+
     def chat(
         self,
         tools: list[dict[str, Any]] | None = None,

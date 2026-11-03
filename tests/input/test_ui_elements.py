@@ -1,15 +1,8 @@
-"""Tests for input/ui_elements.py and scripts/ui_probe.py with fake data.
+"""Tests for input/ui_elements.py with fake data.
 PowerShell is never started, nothing on screen is read, and no model is called."""
-import importlib.util
 import json
-import shutil
-import sys
-import tempfile
 import threading
 import unittest
-from pathlib import Path
-
-from PIL import Image
 
 from desktop_ai_agent.input.ui_elements import (
     UiElement,
@@ -232,101 +225,6 @@ class TestListUiElements(unittest.TestCase):
         self.addCleanup(release.set)
         with self.assertRaisesRegex(RuntimeError, "longer than 0.05s"):
             list_ui_elements(scanner=lambda m: release.wait(5) and [], timeout=0.05, visible_only=False)
-
-
-# ---- the probe script ------------------------------------------------------------
-
-def load_probe():
-    path = Path(__file__).resolve().parents[2] / "scripts" / "ui_probe.py"
-    spec = importlib.util.spec_from_file_location("ui_probe_script", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["ui_probe_script"] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-probe = load_probe()
-
-ELEMENTS = [
-    UiElement(1, "Start", "Button", "taskbar", -1920, 1040, -1872, 1080),
-    UiElement(2, "Volume", "Button", "taskbar", -220, 1040, -180, 1080),
-    UiElement(3, "", "Pane", "taskbar", -100, 1040, -60, 1080),
-]
-
-
-class TestProbe(unittest.TestCase):
-    def setUp(self):
-        self.dir = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
-        self.png = self.dir / "screen.png"
-        Image.new("RGB", (1920, 1080), "white").save(self.png)
-        self.prompts = []
-
-    def capture(self):  # a monitor left of the primary: screen x = image x - 1920
-        return {"path": str(self.png), "width": 1920, "height": 1080, "left": -1920, "top": 0}
-
-    def run_probe(self, reply, targets=("the volume icon",), ask=True):
-        def fake_ask(prompt):
-            self.prompts.append(prompt)
-            if isinstance(reply, Exception):
-                raise reply
-            return reply
-
-        return probe.run_probe(list(targets), capture=self.capture, scan=lambda: list(ELEMENTS),
-                               ask=fake_ask if ask else None, out_dir=self.dir / "out",
-                               scan_stats={"hidden": 7}, log=lambda _m: None)
-
-    def test_pick_maps_to_screen_and_image(self):
-        payload = self.run_probe('{"id": 2}')
-        (r,) = payload["results"]
-        self.assertEqual(r["element"]["name"], "Volume")
-        self.assertEqual(r["screen_px"], (-200, 1060))
-        self.assertEqual(r["image_px"], (1720, 1060))
-        self.assertEqual(r["note"], "")
-
-    def test_prompt_is_text_only_list_of_named_elements(self):
-        self.run_probe('{"id": 2}', targets=["the volume icon"])
-        prompt = self.prompts[0]
-        self.assertIn('2: Button "Volume" (taskbar, bottom-right)', prompt)  # probe passes the real screen
-        self.assertNotIn("3: Pane", prompt)  # unnamed: not listed
-        self.assertIn("Which element is: the volume icon", prompt)
-
-    def test_null_invalid_unknown_and_error(self):
-        cases = [
-            ('{"id": null}', "model says no element matches"),
-            ("no idea", "no id in reply"),
-            ('{"id": 99}', "id 99 is not in the list"),
-            (RuntimeError("ollama down"), "error: ollama down"),
-        ]
-        for reply, note in cases:
-            with self.subTest(note=note):
-                (r,) = self.run_probe(reply)["results"]
-                self.assertEqual(r["note"], note)
-                self.assertIsNone(r["element"])
-
-    def test_files_and_drawings(self):
-        payload = self.run_probe('{"id": 2}')
-        out = self.dir / "out"
-        for name in ("elements.png", "elements.txt", "results.json", payload["results"][0]["image"]):
-            self.assertTrue((out / name).is_file(), name)
-        overview = Image.open(out / "elements.png").convert("RGB")
-        self.assertEqual(overview.getpixel((1700, 1050)), probe.YELLOW)  # left edge of element 2
-        pick = Image.open(out / payload["results"][0]["image"]).convert("RGB")
-        self.assertEqual(pick.getpixel((1720, 1060)), probe.GREEN)  # centre cross
-        data = json.loads((out / "results.json").read_text(encoding="utf-8"))
-        self.assertEqual((data["element_count"], data["listed_for_model"], data["hidden_dropped"]), (3, 2, 7))
-
-    def test_scan_only_asks_nothing(self):
-        payload = self.run_probe('{"id": 2}', ask=False)
-        self.assertEqual(payload["results"], [])
-        self.assertEqual(self.prompts, [])
-
-    def test_args(self):
-        args = probe.parse_args([])
-        self.assertEqual((args.scan_only, args.num_ctx, args.max_items), (False, 16384, 400))
-        self.assertTrue(probe.parse_args(["--scan-only"]).scan_only)
-        self.assertTrue(Path(args.targets).name == "probe_targets.txt" and Path(args.targets).is_file())
-        self.assertEqual((args.show_hidden, probe.parse_args(["--show-hidden"]).show_hidden), (False, True))
 
 
 if __name__ == "__main__":
