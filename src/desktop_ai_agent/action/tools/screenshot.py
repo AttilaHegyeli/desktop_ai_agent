@@ -1,14 +1,74 @@
 """Screen capture: grab the desktop (or a region) and save a PNG under logs/screenshots/."""
 from __future__ import annotations
 
+import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from desktop_ai_agent.paths import SCREENSHOTS_DIR
 
 _INSTALL_HINT = 'pip install -e ".[screenshot]"'
 _SCOPES = frozenset({"primary", "all", "monitor", "region"})
+
+# Display affinity: a window marked EXCLUDEFROMCAPTURE is left out of screen captures.
+# Windows 10 2004+; older builds refuse it and the capture simply includes the window.
+_WDA_NONE = 0x0
+_WDA_EXCLUDEFROMCAPTURE = 0x11
+_SETTLE_SECONDS = 0.05  # let the compositor redraw the screen without our windows
+
+
+@contextmanager
+def _hidden_own_windows() -> Iterator[None]:
+    """Keep this app's own windows (the bar and its popups) out of the capture,
+    so the model never describes the assistant itself. Only during the grab:
+    the user's own recordings and screen sharing still show the app."""
+    hidden = [h for h in _own_visible_windows() if _set_affinity(h, _WDA_EXCLUDEFROMCAPTURE)]
+    if hidden:
+        time.sleep(_SETTLE_SECONDS)
+    try:
+        yield
+    finally:
+        for hwnd in hidden:
+            _set_affinity(hwnd, _WDA_NONE)
+
+
+def _own_visible_windows() -> list[int]:  # pragma: no cover - needs Windows
+    """Handles of the visible top-level windows of this process."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+    except (ImportError, AttributeError, OSError):
+        return []
+    pid = os.getpid()
+    found: list[int] = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def visit(hwnd: int | None, _lparam: int) -> bool:
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if hwnd and owner.value == pid and user32.IsWindowVisible(hwnd):
+            found.append(int(hwnd))
+        return True
+
+    user32.EnumWindows(visit, 0)
+    return found
+
+
+def _set_affinity(hwnd: int, mode: int) -> bool:  # pragma: no cover - needs Windows
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        fn = ctypes.windll.user32.SetWindowDisplayAffinity
+        fn.argtypes = [wintypes.HWND, wintypes.DWORD]
+        fn.restype = wintypes.BOOL
+        return bool(fn(hwnd, mode))
+    except (ImportError, AttributeError, OSError):
+        return False
 
 
 def capture_screen(
@@ -60,7 +120,8 @@ def capture_screen(
             width=width,
             height=height,
         )
-        shot = sct.grab(grab)
+        with _hidden_own_windows():
+            shot = sct.grab(grab)
         img_w, img_h = shot.width, shot.height
         # Real mss always provides left/top; default to 0 so minimal fakes keep working.
         left, top = int(grab.get("left", 0)), int(grab.get("top", 0))

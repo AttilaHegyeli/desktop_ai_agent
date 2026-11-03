@@ -7,7 +7,10 @@ from desktop_ai_agent.orchestrator.prompts import SYSTEM_PROMPT
 
 # Tools named in the prompt for routing; everything else comes from the registry only.
 _NAMED_IN_PROMPT = frozenset(
-    {"provide_script", "web_search", "web_open", "screenshot", "list_elements", "move_mouse", "click", "type_text"}
+    {
+        "provide_script", "web_search", "web_open", "screenshot", "list_elements", "move_mouse",
+        "click", "type_text", "wait",
+    }
 )
 
 
@@ -28,6 +31,10 @@ class TestSystemPrompt(unittest.TestCase):
     def test_has_the_numbered_rules(self):
         for n in range(1, 16):
             self.assertIn(f"\n{n}. ", SYSTEM_PROMPT)
+
+    def test_retakes_a_screenshot_while_an_app_is_loading(self):
+        self.assertIn("\n21. ", SYSTEM_PROMPT)
+        self.assertIn("screenshot again, at most twice", SYSTEM_PROMPT)
 
     def test_vision_is_primary_tool_guidance(self):
         self.assertIn("strongest tool is vision", SYSTEM_PROMPT)

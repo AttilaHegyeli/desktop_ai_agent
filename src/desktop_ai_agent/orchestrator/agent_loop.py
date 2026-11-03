@@ -209,6 +209,18 @@ def needs_screen_vision(text: str) -> bool:
     return bool(text and _VISION_RE.search(text))
 
 
+# A request that starts by opening something ("open spotify and tell me what you see").
+_OPENS_FIRST_RE = re.compile(
+    r"^\W*(?:(?:hey|please|can\s+you|could\s+you|would\s+you)\W+)*(?:open|launch|start)\s+\S",
+    re.IGNORECASE,
+)
+
+
+def opens_first(text: str) -> bool:
+    """True when the request opens an app or page before anything can be looked at."""
+    return bool(text and _OPENS_FIRST_RE.search(text))
+
+
 @dataclass
 class TaskResult:
     status: str  # "done" | "declined" | "failed" | "max_rounds" | "stopped"
@@ -332,7 +344,11 @@ def _start_task(
     attach = list(images) if images else []
     # Auto-capture only when this request needs screen vision (not on every hello/script).
     vision = bool(attach) or (auto_screenshot and needs_screen_vision(user_text))
-    if vision and auto_screenshot and not attach:
+    # "open X and tell me what you see": a capture now shows the screen before X is open.
+    # The refresh after open_app / web_open becomes the first screenshot instead.
+    if vision and not attach and opens_first(user_text):
+        emit("screenshot", "deferred")
+    elif vision and auto_screenshot and not attach:
         b64 = _capture_b64(executor, emit)
         if b64:
             attach = [b64]
