@@ -1,6 +1,0 @@
-# Core runtime dependencies (keep in sync with [project] dependencies in pyproject.toml).
-# Preferred install: pip install -e .
-# Dev tests: pip install -e ".[dev]"
-Pillow>=10.0
-pymupdf>=1.24
-ddgs>=9.0
