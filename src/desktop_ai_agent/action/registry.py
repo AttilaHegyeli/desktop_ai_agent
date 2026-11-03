@@ -169,8 +169,56 @@ def build_default_registry() -> ActionRegistry:
         [
             ActionSpec(
                 name="screenshot",
-                description="Capture the current screen and return it as an image.",
+                description=(
+                    "Capture the screen (or a region) and return it as an image. "
+                    "Primary way to answer on-screen questions — use this whenever "
+                    "the answer might be visible on the desktop. Default scope is "
+                    "primary monitor. Use monitor/region only when the user names "
+                    "a specific display or area."
+                ),
                 risk=Risk.LOW,
+                params=(
+                    Param(
+                        "scope",
+                        "string",
+                        "What to capture: primary (default), all monitors, one monitor, or a region",
+                        required=False,
+                        enum=("primary", "all", "monitor", "region"),
+                    ),
+                    Param(
+                        "monitor",
+                        "integer",
+                        "1-based monitor index when scope is monitor",
+                        required=False,
+                        minimum=1,
+                    ),
+                    Param(
+                        "x",
+                        "integer",
+                        "Region left (virtual-desktop coords) when scope is region",
+                        required=False,
+                    ),
+                    Param(
+                        "y",
+                        "integer",
+                        "Region top (virtual-desktop coords) when scope is region",
+                        required=False,
+                    ),
+                    Param(
+                        "width",
+                        "integer",
+                        "Region width when scope is region",
+                        required=False,
+                        minimum=1,
+                    ),
+                    Param(
+                        "height",
+                        "integer",
+                        "Region height when scope is region",
+                        required=False,
+                        minimum=1,
+                    ),
+                ),
             ),
             ActionSpec(
                 name="wait",
@@ -184,11 +232,113 @@ def build_default_registry() -> ActionRegistry:
                 name="open_app",
                 description=(
                     "Open an installed Windows application by name, for example 'steam' or "
-                    "'vs code'. Only programs found in the program index can be opened."
+                    "'vs code'. Only programs found in the executable index can be opened."
                 ),
                 risk=Risk.MEDIUM,
                 params=(
                     Param("name", "string", "Application name, e.g. steam or vs code", max_length=100),
+                ),
+            ),
+            ActionSpec(
+                name="web_search",
+                description=(
+                    "Search the web and return short result snippets. Use this to answer "
+                    "questions that need current facts (weather, news, definitions). "
+                    "After results return, answer the user in plain text from those snippets. "
+                    "Do not use this when the user only wants a page or site opened."
+                ),
+                risk=Risk.LOW,
+                params=(
+                    Param("query", "string", "Search query", max_length=200),
+                    Param(
+                        "max_results",
+                        "integer",
+                        "How many results to return (default 3)",
+                        required=False,
+                        minimum=1,
+                        maximum=5,
+                    ),
+                ),
+            ),
+            ActionSpec(
+                name="web_open",
+                description=(
+                    "Open an http or https URL in the user's default browser. Use when the "
+                    "user wants to go to a site, open GitHub/YouTube/a link, or play something "
+                    "via a web page. Build a sensible https URL. For answering questions with "
+                    "facts, prefer web_search instead."
+                ),
+                risk=Risk.MEDIUM,
+                params=(
+                    Param("url", "string", "Full http or https URL to open", max_length=2000),
+                ),
+            ),
+            ActionSpec(
+                name="list_elements",
+                description=(
+                    "List the clickable elements visible on screen (buttons, icons, menu items, "
+                    "tabs, links, text boxes) as numbered lines with name, window and rough "
+                    "position. area: active = the window in front (default), taskbar, desktop "
+                    "(desktop icons), all. Call this before move_mouse."
+                ),
+                risk=Risk.LOW,
+                params=(
+                    Param(
+                        "area",
+                        "string",
+                        "Which part of the screen to list (default active)",
+                        required=False,
+                        enum=("active", "taskbar", "desktop", "all"),
+                    ),
+                ),
+            ),
+            ActionSpec(
+                name="move_mouse",
+                description=(
+                    "Move the mouse pointer onto one element from the latest list_elements "
+                    "result, by its number. It does not click."
+                ),
+                risk=Risk.MEDIUM,
+                params=(
+                    Param("element", "integer", "Element number from the latest list_elements result", minimum=1),
+                ),
+            ),
+            ActionSpec(
+                name="click",
+                description=(
+                    "Click one element from the latest list_elements result, by its number. "
+                    "Only click what the user asked for. After a click the list is cleared: "
+                    "call list_elements again before any further mouse action."
+                ),
+                risk=Risk.MEDIUM,
+                params=(
+                    Param("element", "integer", "Element number from the latest list_elements result", minimum=1),
+                    Param(
+                        "button",
+                        "string",
+                        "Mouse button (default left)",
+                        required=False,
+                        enum=("left", "right"),
+                    ),
+                    Param(
+                        "double",
+                        "boolean",
+                        "Double-click instead of a single click, e.g. to open a desktop icon (default false)",
+                        required=False,
+                    ),
+                ),
+            ),
+            ActionSpec(
+                name="type_text",
+                description=(
+                    "Click into an input field (Edit, ComboBox or Document element) from the "
+                    "latest list_elements result and paste text into it. It never presses Enter "
+                    "and never types into password fields."
+                ),
+                risk=Risk.MEDIUM,
+                params=(
+                    Param("element", "integer", "Input field number from the latest list_elements result", minimum=1),
+                    Param("text", "string", "The text to enter", max_length=2000),
                 ),
             ),
             ActionSpec(

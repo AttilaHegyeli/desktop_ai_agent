@@ -15,11 +15,13 @@ from typing import Any, Callable
 
 from desktop_ai_agent.action.audit_log import AuditLog
 from desktop_ai_agent.action.executor import ConfirmFn, Executor, default_executor
-from desktop_ai_agent.core.chat_client import ChatClient
+from desktop_ai_agent.core.chat_client import ChatClient, UsageFn
 from desktop_ai_agent.orchestrator.agent_loop import EventFn, TaskResult, run_task
 from desktop_ai_agent.orchestrator.prompts import SYSTEM_PROMPT
 
 DoneFn = Callable[[TaskResult], None]
+
+CONTEXT_TOKENS = 8192  # num_ctx: the model's context window (the UI meter's 8k)
 
 
 class AgentService:
@@ -28,6 +30,7 @@ class AgentService:
         self.executor = executor
         self._lock = threading.Lock()
         self._busy = False
+        self._stop = threading.Event()
 
     @classmethod
     def create(
@@ -43,7 +46,8 @@ class AgentService:
         client = ChatClient(
             model,
             host,
-            options=options or {"temperature": 0.2, "num_ctx": 8192},
+            options=options or {"temperature": 0.2, "num_ctx": CONTEXT_TOKENS},
+
             system=system_prompt,  # tool calls ignore the JSON format, so no need to disable it
         )
         audit = AuditLog(audit_path) if audit_path else AuditLog()
@@ -53,9 +57,36 @@ class AgentService:
     def busy(self) -> bool:
         return self._busy
 
+    @property
+    def context_limit(self) -> int:
+        return getattr(self.client, "context_limit", None) or CONTEXT_TOKENS
+
+    @property
+    def context_used(self) -> int:
+        return getattr(self.client, "context_used", 0)
+
+    def set_usage_listener(self, fn: UsageFn | None) -> None:
+        """fn(tokens_used) fires while replies stream, FROM THE AGENT THREAD."""
+        self.client.on_usage = fn
+
     def reset(self) -> None:
         """Forget the conversation (e.g. a 'New chat' button)."""
+        from desktop_ai_agent.action.tools import ui_control
+
         self.client.clear()
+        ui_control.reset()
+
+    def stop(self) -> None:
+        """Ask the running task to stop: cuts the model reply, skips pending steps.
+
+        A step that is already executing (e.g. a long wait) finishes first.
+        """
+        if not self._busy:
+            return
+        self._stop.set()
+        abort = getattr(self.client, "abort", None)
+        if abort:
+            abort()
 
     def submit(
         self,
@@ -68,10 +99,17 @@ class AgentService:
             if self._busy:
                 return False
             self._busy = True
+            self._stop.clear()
 
         def work() -> None:
             try:
-                result = run_task(self.client, self.executor, text, on_event=on_event)
+                result = run_task(
+                    self.client,
+                    self.executor,
+                    text,
+                    on_event=on_event,
+                    should_stop=self._stop.is_set,
+                )
             except Exception as exc:  # never let a crash kill the UI thread silently
                 result = TaskResult("failed", f"Error: {exc}", 0)
             finally:

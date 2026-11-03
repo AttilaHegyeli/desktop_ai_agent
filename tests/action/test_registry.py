@@ -87,6 +87,23 @@ class TestRegistry(unittest.TestCase):
         self.assertEqual(fn["parameters"]["properties"]["x"]["maximum"], 3840)
         self.assertFalse(fn["parameters"]["additionalProperties"])
 
+    def test_screenshot_params_optional_with_scope_enum(self):
+        spec = build_default_registry().get("screenshot")
+        self.assertEqual(spec.validate({}), {})
+        self.assertEqual(spec.validate({"scope": "primary"}), {"scope": "primary"})
+        self.assertEqual(
+            spec.validate({"scope": "monitor", "monitor": 2}),
+            {"scope": "monitor", "monitor": 2},
+        )
+        self.assertEqual(
+            spec.validate({"scope": "region", "x": 0, "y": 0, "width": 10, "height": 5}),
+            {"scope": "region", "x": 0, "y": 0, "width": 10, "height": 5},
+        )
+        with self.assertRaisesRegex(ValidationError, "one of"):
+            spec.validate({"scope": "window"})
+        with self.assertRaisesRegex(ValidationError, ">= 1"):
+            spec.validate({"width": 0})
+
 
 if __name__ == "__main__":
     unittest.main()

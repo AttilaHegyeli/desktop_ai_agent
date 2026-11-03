@@ -85,6 +85,19 @@ class TestService(unittest.TestCase):
         AgentService(client, executor()).reset()
         self.assertTrue(client.cleared)
 
+    def test_reset_also_clears_ui_control_memory(self):
+        from desktop_ai_agent.action.tools import ui_control
+
+        ui_control._last = object()  # type: ignore[assignment]
+        ui_control._cleared_by = "click"
+        ui_control._click_times.append(1.0)
+        ui_control._locked_until = 999.0
+        AgentService(FakeClient(), executor()).reset()
+        self.assertIsNone(ui_control._last)
+        self.assertIsNone(ui_control._cleared_by)
+        self.assertEqual(ui_control._click_times, [])
+        self.assertEqual(ui_control._locked_until, 0.0)
+
     def test_create_builds_default_stack(self):
         service = AgentService.create(audit_path=None)
         self.assertIn("wait", service.executor.registry.names())
@@ -97,6 +110,31 @@ class TestService(unittest.TestCase):
         service.reset()
         self.assertEqual(service.client.messages, [{"role": "system", "content": SYSTEM_PROMPT}])
 
+
+
+
+class TestServiceStop(unittest.TestCase):
+    def test_stop_aborts_running_task(self):
+        gate = threading.Event()
+        turn = ChatTurn(tool_calls=[{"function": {"name": "peek", "arguments": {}}}])
+        client = FakeClient(turns=[turn], gate=gate)
+        client.abort = gate.set  # like ChatClient.abort: unblocks the stream
+        service = AgentService(client, executor())
+        done = threading.Event()
+        box = {}
+        self.assertTrue(service.submit("go", on_done=lambda r: (box.update(r=r), done.set())))
+        service.stop()
+        self.assertTrue(done.wait(5))
+        self.assertEqual(box["r"].status, "stopped")
+        self.assertFalse(service.busy)
+
+    def test_stop_when_idle_does_nothing(self):
+        AgentService(FakeClient(), executor()).stop()
+
+    def test_create_uses_8k_context(self):
+        service = AgentService.create(audit_path=None)
+        self.assertEqual(service.context_limit, 8192)
+        self.assertEqual(service.context_used, 0)
 
 if __name__ == "__main__":
     unittest.main()
