@@ -71,7 +71,10 @@ class AgentService:
 
     def reset(self) -> None:
         """Forget the conversation (e.g. a 'New chat' button)."""
+        from desktop_ai_agent.action.tools import ui_control
+
         self.client.clear()
+        ui_control.reset()
 
     def stop(self) -> None:
         """Ask the running task to stop: cuts the model reply, skips pending steps.
