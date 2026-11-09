@@ -2,7 +2,12 @@ import unittest
 
 from desktop_ai_agent.action.registry import build_default_registry
 from desktop_ai_agent.core.chat_client import ChatClient
-from desktop_ai_agent.orchestrator.prompts import SYSTEM_PROMPT
+from desktop_ai_agent.orchestrator.prompts import (
+    DESKTOP_AGENT_PROMPT,
+    LOCAL_GEMMA_EXTRAS,
+    SYSTEM_PROMPT,
+    system_prompt_for,
+)
 
 
 # Tools named in the prompt for routing; everything else comes from the registry only.
@@ -54,6 +59,12 @@ class TestSystemPrompt(unittest.TestCase):
         c.add_user("hi")
         c.clear()
         self.assertEqual(c.messages, [{"role": "system", "content": SYSTEM_PROMPT}])
+
+    def test_system_prompt_for_splits_local_and_api(self):
+        self.assertEqual(system_prompt_for("local"), SYSTEM_PROMPT)
+        self.assertEqual(system_prompt_for("openrouter"), DESKTOP_AGENT_PROMPT)
+        self.assertIn("Local-model extras", LOCAL_GEMMA_EXTRAS)
+        self.assertNotIn("Local-model extras", DESKTOP_AGENT_PROMPT)
 
 
 if __name__ == "__main__":

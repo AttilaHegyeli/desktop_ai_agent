@@ -38,6 +38,10 @@ class TestFormatEvent(unittest.TestCase):
         self.assertIn("click(", format_event("stuck", ['click({"element": 3})']))
         self.assertIn("fresh chat (#1)", format_event("handoff", 1))
         self.assertIn("call:wait{seconds:5}", format_event("recovered", "call:wait{seconds:5}<tool_call|>"))
+        self.assertIn(
+            "switched to API · GPT-4o",
+            format_event("model_switch", {"label": "API · GPT-4o", "reason": "context"}),
+        )
 
 
 if __name__ == "__main__":

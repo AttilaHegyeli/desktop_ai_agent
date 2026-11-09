@@ -22,6 +22,7 @@ from typing import Any, Callable
 
 from desktop_ai_agent.action.executor import Executor, StepResult, plan_from_tool_calls
 from desktop_ai_agent.core.chat_client import ChatCancelled
+from desktop_ai_agent.core.openrouter_client import OpenRouterError
 from desktop_ai_agent.orchestrator.task_state import TaskState
 
 EventFn = Callable[[str, Any], None]
@@ -524,19 +525,45 @@ def handoff_note(state: TaskState) -> str:
     return "\n".join(lines)
 
 
+def _record_handoff(state: TaskState, note: str, emit: EventFn) -> None:
+    state.handoffs += 1
+    state.handoff_mark = len(state.steps)
+    state.added_chars = len(note)
+    emit("handoff", state.handoffs)
+
+
 def _handoff(client: Any, state: TaskState, emit: EventFn) -> None:
     """Restart the chat with a handoff note. All tool calls are answered at this point.
 
     No screenshot is attached: an image would refill much of the space just freed.
     The model can call screenshot itself when it needs to see the screen.
     """
-    client.clear()
     note = handoff_note(state)
+    escalate = getattr(client, "escalate", None)
+    if callable(escalate):
+        info = escalate(note, reason="context")
+        if info:
+            _record_handoff(state, note, emit)
+            emit("model_switch", info)
+            return
+    client.clear()
     client.add_user(note)
-    state.handoffs += 1
-    state.handoff_mark = len(state.steps)
-    state.added_chars = len(note)
-    emit("handoff", state.handoffs)
+    _record_handoff(state, note, emit)
+
+
+def _escalate_on_api_error(client: Any, state: TaskState, emit: EventFn, exc: Exception) -> bool:
+    """Try primary→fallback→local after an OpenRouter failure. True if task can continue."""
+    escalate = getattr(client, "escalate", None)
+    if not callable(escalate):
+        return False
+    note = handoff_note(state)
+    skip_api = bool(getattr(exc, "skip_api_fallback", False))
+    info = escalate(note, reason=f"api_error:{exc}", skip_api_fallback=skip_api)
+    if not info:
+        return False
+    _record_handoff(state, note, emit)
+    emit("model_switch", info)
+    return True
 
 
 def _run_round(
@@ -629,6 +656,12 @@ def run_task(
             turn = client.chat(tools=tools)
         except ChatCancelled:
             return _stopped(client, round_no)
+        except OpenRouterError as exc:
+            if getattr(exc, "retriable", False) and _escalate_on_api_error(
+                client, state, emit, exc
+            ):
+                continue
+            return TaskResult("failed", f"Core AI error: {exc}", round_no)
         state.added_chars = 0  # the reply's token count now covers everything sent
         _recover_leaked_calls(client, executor, turn, emit)
         if _should_nudge(state, turn):

@@ -344,6 +344,7 @@ class OverlayBar:
         on_close_chat: Callable[[], None] | None = None,
         on_new_chat: Callable[[], None] | None = None,
         on_stop: Callable[[], None] | None = None,
+        on_model_change: Callable[[str], None] | None = None,
     ) -> None:
         cfg = ui or {}
         # Prefer an explicit width; otherwise size from the screen so the chat
@@ -370,7 +371,16 @@ class OverlayBar:
         self._on_close_chat = on_close_chat
         self._on_new_chat = on_new_chat
         self._on_stop = on_stop
+        self._on_model_change = on_model_change
         self._voice_enabled = voice_enabled
+        self._model_labels: list[str] = []
+        self._model_ids: list[str] = []
+        self._model_by_label: dict[str, str] = {}
+        self._suppress_model_event = False
+        self._api_models_enabled = False
+        self._model_popup: tk.Toplevel | None = None
+        self._model_popup_icons: list[tk.PhotoImage] = []
+        self._model_menu_open = False
 
         self._mode: BarMode = "collapsed"
         self._ready = False
@@ -531,6 +541,32 @@ class OverlayBar:
         self._draw_meter()
 
         tk.Frame(self._header, bg=_CARD).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        self._model_wrap = tk.Frame(self._header, bg=_CARD, highlightthickness=0)
+        self._model_wrap.pack(side=tk.LEFT, padx=(0, 8))
+        self._model_caption = tk.Label(
+            self._model_wrap,
+            text="CORE",
+            bg=_CARD,
+            fg=_MUTED,
+            font=("Segoe UI Semibold", 7),
+            anchor=tk.E,
+        )
+        self._model_caption.pack(side=tk.LEFT, padx=(0, 6))
+        self._model_var = tk.StringVar(value="")
+        self.model_btn = RoundButton(
+            self._model_wrap,
+            text="Local · gemma4  ▾",
+            command=self._open_model_menu,
+            diameter=28,
+            pill_width=148,
+            fill=_WHITE,
+            fg=_FG,
+            active_fill=_ACCENT_SOFT,
+            stroke=_CHIP_STROKE,
+            font=("Segoe UI Semibold", 8),
+        )
+        self.model_btn.pack(side=tk.LEFT)
 
         self.new_chat_btn = RoundButton(
             self._header,
@@ -885,6 +921,338 @@ class OverlayBar:
         if self._on_close_chat:
             self._on_close_chat()
 
+    def _short_model_label(self, label: str) -> str:
+        text = (label or "").replace("API · ", "").replace("Local · ", "Local · ")
+        if len(text) > 16:
+            text = text[:15] + "…"
+        return f"{text}  ▾"
+
+    def _pick_model(self, selection_id: str) -> None:
+        self._close_model_menu()
+        if self._suppress_model_event or not self._on_model_change:
+            return
+        if not self._ready or self._busy or self._task_running:
+            return
+        label = None
+        for sid, disp in zip(self._model_ids, self._model_labels):
+            if sid == selection_id:
+                label = disp
+                break
+        if label:
+            self._model_var.set(label)
+            self.model_btn.set_style(text=self._short_model_label(label))
+        self._on_model_change(selection_id)
+
+    def _close_model_menu(self) -> None:
+        pop = self._model_popup
+        self._model_popup = None
+        self._model_popup_icons.clear()
+        was_open = self._model_menu_open
+        self._model_menu_open = False
+        if pop is None and not was_open:
+            return
+        if pop is not None:
+            try:
+                pop.grab_release()
+            except tk.TclError:
+                pass
+            try:
+                pop.destroy()
+            except tk.TclError:
+                pass
+        # After closing, resume normal leave/collapse behavior from current pointer.
+        if was_open and not self._pointer_inside and not self._busy:
+            self._leave_job = self.win.after(self._leave_grace_ms, self._maybe_collapse_after_leave)
+
+    def _open_model_menu(self) -> None:
+        if not self._ready or self._busy or self._task_running:
+            return
+        if self._model_popup is not None:
+            self._close_model_menu()
+            return
+        # Pin the chat bar open while the menu is showing.
+        self._model_menu_open = True
+        self._pointer_inside = True
+        self._cancel_leave()
+        self._cancel_auto_hide()
+        if self._mode == "collapsed":
+            self._apply_mode("expanded")
+        visible = [
+            (sid, label)
+            for sid, label in zip(self._model_ids, self._model_labels)
+            if self._api_models_enabled or sid.startswith("local:")
+        ]
+        local_rows = [(s, l) for s, l in visible if s.startswith("local:")]
+        api_rows = [(s, l) for s, l in visible if not s.startswith("local:")]
+        current = self._model_var.get()
+
+        # Build row plan: ("header"|"item"|"hint", text, selection_id|None)
+        rows: list[tuple[str, str, str | None]] = []
+        if local_rows:
+            rows.append(("header", "Local", None))
+            for sid, label in local_rows:
+                rows.append(("item", label, sid))
+        if api_rows:
+            if rows:
+                rows.append(("spacer", "", None))
+            rows.append(("header", "OpenRouter", None))
+            for sid, label in api_rows:
+                rows.append(("item", label, sid))
+        elif local_rows:
+            rows.append(("spacer", "", None))
+            rows.append(("hint", "Add key in .env for API models", None))
+        if not rows:
+            rows.append(("hint", "No models available", None))
+
+        pad = 8
+        card_w = 220
+        row_h = 30
+        header_h = 22
+        spacer_h = 8
+        hint_h = 26
+        inner_h = pad
+        for kind, _, _ in rows:
+            if kind == "header":
+                inner_h += header_h
+            elif kind == "spacer":
+                inner_h += spacer_h
+            elif kind == "hint":
+                inner_h += hint_h
+            else:
+                inner_h += row_h
+        inner_h += pad
+        win_w = card_w + 10
+        win_h = inner_h + 12
+
+        pop = tk.Toplevel(self.win)
+        pop.overrideredirect(True)
+        pop.attributes("-topmost", True)
+        try:
+            pop.attributes("-transparentcolor", _KEY)
+        except tk.TclError:
+            pass
+        pop.configure(bg=_KEY)
+        self._model_popup = pop
+        self._model_popup_icons = []
+
+        canvas = tk.Canvas(
+            pop, width=win_w, height=win_h, bg=_KEY, highlightthickness=0, bd=0
+        )
+        canvas.pack(fill=tk.BOTH, expand=True)
+
+        # Soft shadow + rounded white card.
+        _round_rect(
+            canvas, 4, 4, win_w - 2, win_h - 2, 18, fill=_SHADOW, outline=""
+        )
+        _round_rect(
+            canvas,
+            2,
+            2,
+            win_w - 6,
+            win_h - 6,
+            16,
+            fill=_WHITE,
+            outline=_CARD_STROKE,
+            width=1,
+        )
+
+        y = pad + 4
+        x0, x1 = 12, card_w - 2
+
+        def _draw_header(text: str, yy: int) -> int:
+            canvas.create_text(
+                x0 + 8,
+                yy + header_h / 2,
+                text=text.upper(),
+                anchor=tk.W,
+                fill=_MUTED,
+                font=("Segoe UI Semibold", 7),
+            )
+            return yy + header_h
+
+        def _draw_hint(text: str, yy: int) -> int:
+            canvas.create_text(
+                x0 + 8,
+                yy + hint_h / 2,
+                text=text,
+                anchor=tk.W,
+                fill=_MUTED,
+                font=("Segoe UI", 8),
+            )
+            return yy + hint_h
+
+        def _draw_item(label: str, sid: str, yy: int) -> int:
+            selected = label == current
+            tag = f"row_{sid}"
+            cy = yy + row_h / 2
+            # Invisible hit area (no selected/hover bar fill).
+            canvas.create_rectangle(
+                x0,
+                yy + 1,
+                x1,
+                yy + row_h - 1,
+                fill=_WHITE,
+                outline="",
+                tags=(tag, "item"),
+            )
+            # Selection marker: a point (not a checkmark / bar).
+            if selected:
+                canvas.create_oval(
+                    x0 + 10,
+                    cy - 3,
+                    x0 + 16,
+                    cy + 3,
+                    fill=_ACCENT,
+                    outline="",
+                    tags=(tag, "item"),
+                )
+            else:
+                canvas.create_oval(
+                    x0 + 11,
+                    cy - 2,
+                    x0 + 15,
+                    cy + 2,
+                    fill=_WHITE,
+                    outline=_CHIP_STROKE,
+                    tags=(tag, "item", f"{tag}_dot"),
+                )
+            label_id = canvas.create_text(
+                x0 + 24,
+                cy,
+                text=label,
+                anchor=tk.W,
+                fill=_FG if selected else _MUTED,
+                font=("Segoe UI Semibold", 9) if selected else ("Segoe UI", 9),
+                tags=(tag, "item"),
+            )
+
+            def on_enter(_e: tk.Event, lid: int = label_id) -> None:  # type: ignore[type-arg]
+                if not selected:
+                    canvas.itemconfigure(lid, fill=_FG)
+
+            def on_leave(_e: tk.Event, lid: int = label_id) -> None:  # type: ignore[type-arg]
+                if not selected:
+                    canvas.itemconfigure(lid, fill=_MUTED)
+
+            def on_click(_e: tk.Event, s: str = sid) -> None:  # type: ignore[type-arg]
+                self._pick_model(s)
+
+            canvas.tag_bind(tag, "<Enter>", on_enter)
+            canvas.tag_bind(tag, "<Leave>", on_leave)
+            canvas.tag_bind(tag, "<Button-1>", on_click)
+            return yy + row_h
+
+        for kind, text, sid in rows:
+            if kind == "header":
+                y = _draw_header(text, y)
+            elif kind == "spacer":
+                y += spacer_h
+            elif kind == "hint":
+                y = _draw_hint(text, y)
+            elif sid is not None:
+                y = _draw_item(text, sid, y)
+
+        bx = self.model_btn.winfo_rootx()
+        by = self.model_btn.winfo_rooty() + self.model_btn.winfo_height() + 6
+        # Prefer aligning under the pill; keep on-screen.
+        screen_w = int(self.win.winfo_screenwidth())
+        screen_h = int(self.win.winfo_screenheight())
+        px = min(max(8, bx - 40), max(8, screen_w - win_w - 8))
+        py = by if by + win_h < screen_h - 8 else max(8, self.model_btn.winfo_rooty() - win_h - 6)
+        pop.geometry(f"{win_w}x{win_h}+{px}+{py}")
+        pop.bind("<Escape>", lambda _e: self._close_model_menu())
+        # Moving onto the popup must not collapse the main bar.
+        pop.bind("<Enter>", lambda _e: self._on_model_popup_enter(), add="+")
+        canvas.bind("<Enter>", lambda _e: self._on_model_popup_enter(), add="+")
+        # Click outside the card (transparent chrome) closes the menu.
+        canvas.bind("<Button-1>", self._on_model_popup_canvas_click, add="+")
+        # Dismiss when clicking back on the main bar outside the model button.
+        self.win.bind("<Button-1>", self._on_bar_click_while_menu, add="+")
+        try:
+            pop.focus_force()
+        except tk.TclError:
+            pass
+
+    def _on_model_popup_enter(self) -> None:
+        self._model_menu_open = True
+        self._pointer_inside = True
+        self._cancel_leave()
+        self._cancel_auto_hide()
+
+    def _on_bar_click_while_menu(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        if not self._model_menu_open:
+            return
+        w: tk.Misc | None = event.widget
+        while w is not None:
+            if w is self.model_btn or w is self._model_wrap:
+                return
+            w = getattr(w, "master", None)
+        self._close_model_menu()
+
+    def _on_model_popup_canvas_click(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        # Empty chrome / outside row items → dismiss.
+        try:
+            hits = event.widget.find_withtag("current")
+        except tk.TclError:
+            hits = ()
+        tags: set[str] = set()
+        for item in hits:
+            tags.update(event.widget.gettags(item))
+        if "item" not in tags:
+            self._close_model_menu()
+
+    def set_core_models(
+        self,
+        choices: list[tuple[str, str]],
+        *,
+        selected_id: str | None = None,
+        api_enabled: bool = True,
+    ) -> None:
+        """choices: list of (selection_id, display_label)."""
+        self._model_ids = [c[0] for c in choices]
+        self._model_labels = [c[1] for c in choices]
+        self._model_by_label = {label: sid for sid, label in choices}
+        self._api_models_enabled = api_enabled
+        visible = [
+            (sid, label)
+            for sid, label in choices
+            if api_enabled or sid.startswith("local:")
+        ]
+        pick = None
+        if selected_id:
+            for sid, label in visible:
+                if sid == selected_id:
+                    pick = label
+                    break
+        if pick is None and visible:
+            pick = visible[0][1]
+        self._suppress_model_event = True
+        try:
+            self._model_var.set(pick or "")
+            self.model_btn.set_style(text=self._short_model_label(pick or "Model"))
+        finally:
+            self._suppress_model_event = False
+        self._refresh_model_combo_state()
+
+    def set_core_model_selection(self, selection_id: str) -> None:
+        label = None
+        for sid, disp in zip(self._model_ids, self._model_labels):
+            if sid == selection_id:
+                label = disp
+                break
+        if label is None:
+            return
+        self._suppress_model_event = True
+        try:
+            self._model_var.set(label)
+            self.model_btn.set_style(text=self._short_model_label(label))
+        finally:
+            self._suppress_model_event = False
+
+    def _refresh_model_combo_state(self) -> None:
+        ok = bool(self._model_labels) and self._ready and not self._busy and not self._task_running
+        self.model_btn.set_style(enabled=ok)
+
     def close_chat(self) -> None:
         self._cancel_auto_hide()
         self._cancel_leave()
@@ -1074,12 +1442,20 @@ class OverlayBar:
             self._apply_mode(target)
 
     def _on_leave(self, _event: tk.Event | None = None) -> None:  # type: ignore[type-arg]
+        if self._model_menu_open:
+            # Pointer moved toward the floating dropdown — keep the bar up.
+            self._pointer_inside = True
+            self._cancel_leave()
+            self._cancel_auto_hide()
+            return
         self._pointer_inside = False
         self._cancel_leave()
         self._leave_job = self.win.after(self._leave_grace_ms, self._maybe_collapse_after_leave)
 
     def _maybe_collapse_after_leave(self) -> None:
         self._leave_job = None
+        if self._model_menu_open:
+            return
         if self._pointer_inside:
             return
         if self.win.focus_get() == self.prompt:
@@ -1109,7 +1485,7 @@ class OverlayBar:
 
     def _auto_hide(self) -> None:
         self._hide_job = None
-        if self._pointer_inside or self._busy or self._is_typing():
+        if self._model_menu_open or self._pointer_inside or self._busy or self._is_typing():
             return
         if self.win.focus_get() == self.prompt:
             return
@@ -1258,11 +1634,13 @@ class OverlayBar:
         self._apply_mode(self._mode)
 
     def hide(self) -> None:
+        self._close_model_menu()
         self._cancel_leave()
         self._cancel_auto_hide()
         self.win.withdraw()
 
     def destroy(self) -> None:
+        self._close_model_menu()
         self._cancel_leave()
         self._cancel_auto_hide()
         self._cancel_typewriter()
@@ -1293,7 +1671,7 @@ class OverlayBar:
             self.hide()
 
     def _idle_intro_collapse(self) -> None:
-        if self._pointer_inside or self._busy or self._mode == "reply":
+        if self._model_menu_open or self._pointer_inside or self._busy or self._mode == "reply":
             return
         if self.win.focus_get() == self.prompt and not self._ph_active and self.prompt.get().strip():
             return
@@ -1343,6 +1721,7 @@ class OverlayBar:
     def _refresh_controls(self) -> None:
         ok = self._ready and not self._busy
         circle = self._circle
+        self._refresh_model_combo_state()
         if ok:
             self.prompt.configure(state=tk.NORMAL)
             if not self.prompt.get().strip() and not self._ph_active:

@@ -16,8 +16,9 @@ from typing import Any, Callable
 from desktop_ai_agent.action.audit_log import AuditLog
 from desktop_ai_agent.action.executor import ConfirmFn, Executor, default_executor
 from desktop_ai_agent.core.chat_client import ChatClient, UsageFn
+from desktop_ai_agent.core.core_router import CoreRouter
 from desktop_ai_agent.orchestrator.agent_loop import EventFn, TaskResult, run_task
-from desktop_ai_agent.orchestrator.prompts import SYSTEM_PROMPT
+from desktop_ai_agent.orchestrator.prompts import SYSTEM_PROMPT, system_prompt_for
 
 DoneFn = Callable[[TaskResult], None]
 
@@ -42,16 +43,29 @@ class AgentService:
         audit_path: str | None = "logs/audit.jsonl",
         options: dict[str, Any] | None = None,
         system_prompt: str | None = SYSTEM_PROMPT,
+        router: CoreRouter | None = None,
     ) -> "AgentService":
-        client = ChatClient(
-            model,
-            host,
-            options=options or {"temperature": 0.2, "num_ctx": CONTEXT_TOKENS},
-
-            system=system_prompt,  # tool calls ignore the JSON format, so no need to disable it
-        )
+        if router is not None:
+            client: Any = router
+        else:
+            client = ChatClient(
+                model,
+                host,
+                options=options or {"temperature": 0.2, "num_ctx": CONTEXT_TOKENS},
+                system=system_prompt or system_prompt_for("local"),
+            )
         audit = AuditLog(audit_path) if audit_path else AuditLog()
         return cls(client, default_executor(confirm=confirm, audit=audit))
+
+    @classmethod
+    def create_with_router(
+        cls,
+        router: CoreRouter,
+        *,
+        confirm: ConfirmFn | None = None,
+        audit_path: str | None = "logs/audit.jsonl",
+    ) -> "AgentService":
+        return cls.create(router=router, confirm=confirm, audit_path=audit_path)
 
     @property
     def busy(self) -> bool:
@@ -65,9 +79,29 @@ class AgentService:
     def context_used(self) -> int:
         return getattr(self.client, "context_used", 0)
 
+    @property
+    def active_model_label(self) -> str:
+        label = getattr(self.client, "active_label", None)
+        if label:
+            return str(label)
+        return str(getattr(self.client, "model", "unknown"))
+
     def set_usage_listener(self, fn: UsageFn | None) -> None:
         """fn(tokens_used) fires while replies stream, FROM THE AGENT THREAD."""
-        self.client.on_usage = fn
+        setter = getattr(self.client, "set_usage_listener", None)
+        if callable(setter):
+            setter(fn)
+        else:
+            self.client.on_usage = fn
+
+    def set_model(self, selection_id: str) -> str:
+        """Switch core model when idle. Returns display label."""
+        if self._busy:
+            raise RuntimeError("Cannot change core model while a task is running")
+        setter = getattr(self.client, "set_selection", None)
+        if not callable(setter):
+            raise RuntimeError("This agent has no model router")
+        return setter(selection_id, reset=True)
 
     def reset(self) -> None:
         """Forget the conversation (e.g. a 'New chat' button)."""

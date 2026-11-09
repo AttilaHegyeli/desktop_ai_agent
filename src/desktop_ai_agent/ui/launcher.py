@@ -6,7 +6,15 @@ from tkinter import scrolledtext, ttk
 from typing import Any
 
 from desktop_ai_agent.core.chat_client import ChatClient
-from desktop_ai_agent.core.config_loader import load_setup
+from desktop_ai_agent.core.config_loader import (
+    load_dotenv,
+    load_setup,
+    openrouter_api_key,
+    save_openrouter_key_to_env,
+    save_setup,
+)
+from desktop_ai_agent.core.core_router import CoreRouter
+from desktop_ai_agent.core.model_catalog import parse_selection, selected_id
 from desktop_ai_agent.core.session_setup import SessionSetup
 from desktop_ai_agent.input.voice import (
     PushToTalk,
@@ -61,6 +69,7 @@ class LauncherApp:
         self._tts_keep_command = False
         self._last_user = ""
         self._bar: OverlayBar | None = None
+        self._router: CoreRouter | None = None
 
         self._build()
         self._ensure_bar()
@@ -81,6 +90,17 @@ class LauncherApp:
             "serve → pull → configure → top-edge chat bar"
         )
         ttk.Label(frame, text=summary).pack(anchor=tk.W, padx=4, pady=(0, 8))
+
+        load_dotenv()
+        key_row = ttk.Frame(frame)
+        key_row.pack(fill=tk.X, padx=4, pady=(0, 8))
+        ttk.Label(key_row, text="OpenRouter key (.env)").pack(side=tk.LEFT)
+        self._api_key_var = tk.StringVar(value=openrouter_api_key() or "")
+        self._api_key_entry = ttk.Entry(key_row, textvariable=self._api_key_var, show="*", width=42)
+        self._api_key_entry.pack(side=tk.LEFT, padx=(8, 0), fill=tk.X, expand=True)
+        ttk.Button(key_row, text="Save to .env", command=self._save_api_key).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
 
         ttk.Label(frame, text="Setup log").pack(anchor=tk.W, padx=4)
         self.log = scrolledtext.ScrolledText(
@@ -103,6 +123,21 @@ class LauncherApp:
         self._append_log("Starting automatically from: python -m app")
         self._append_log("Waiting for setup... the chat bar appears when ready.")
 
+    def _save_api_key(self) -> None:
+        key = (self._api_key_var.get() or "").strip()
+        save_openrouter_key_to_env(key)
+        self._append_log("[core_ai] OpenRouter API key saved to .env (gitignored)")
+        if self._router is not None:
+            self._router.api_key = key or None
+            # Rebuild active client if user is on an API model without a previous key.
+            self._sync_model_dropdown()
+            if key and self._agent is not None and not self._agent.busy:
+                try:
+                    self._agent.set_model(self._router.selection_id)
+                    self._on_context_usage(self._agent.context_used)
+                except Exception as exc:  # noqa: BLE001
+                    self._append_log(f"[core_ai] could not refresh API client: {exc}")
+
     def _ensure_bar(self) -> OverlayBar:
         if self._bar is None:
             ui = self.setup.get("ui", {})
@@ -117,9 +152,64 @@ class LauncherApp:
                 on_close_chat=self._on_bar_close_chat,
                 on_new_chat=self._on_new_chat,
                 on_stop=self._on_stop,
+                on_model_change=self._on_model_change,
             )
             self._bar.set_context(0, CONTEXT_TOKENS)
+            self._sync_model_dropdown()
         return self._bar
+
+    def _sync_model_dropdown(self) -> None:
+        bar = self._ensure_bar()
+        router = self._router
+        if router is None:
+            # Preview from setup before router exists.
+            from desktop_ai_agent.core.model_catalog import load_catalog
+
+            catalog = load_catalog(self.setup)
+            choices = [(c.selection_id, c.display) for c in catalog]
+            sid = selected_id(self.setup)
+            bar.set_core_models(
+                choices,
+                selected_id=sid,
+                api_enabled=bool(openrouter_api_key()),
+            )
+            return
+        choices = [(c.selection_id, c.display) for c in router.dropdown_choices()]
+        bar.set_core_models(
+            choices,
+            selected_id=router.selection_id,
+            api_enabled=router.has_api_key(),
+        )
+
+    def _persist_selection(self, selection_id: str) -> None:
+        core = dict(self.setup.get("core_ai") or {})
+        core["selected"] = selection_id
+        self.setup["core_ai"] = core
+        try:
+            save_setup(self.setup)
+        except OSError as exc:
+            self._append_log(f"[core_ai] could not save selection: {exc}")
+
+    def _on_model_change(self, selection_id: str) -> None:
+        if self._busy or self._agent is None or self._router is None:
+            return
+        provider, _ = parse_selection(selection_id)
+        if provider == "openrouter" and not self._router.has_api_key():
+            self._append_log("[core_ai] set an OpenRouter API key in Configuration first")
+            self._ensure_bar().status_message("OpenRouter API key required")
+            self._sync_model_dropdown()
+            return
+        try:
+            label = self._agent.set_model(selection_id)
+        except Exception as exc:  # noqa: BLE001
+            self._append_log(f"[core_ai] model switch failed: {exc}")
+            self._sync_model_dropdown()
+            return
+        self._persist_selection(selection_id)
+        self._last_user = ""
+        self._ensure_bar().reset_chat()
+        self._on_context_usage(self._agent.context_used)
+        self._append_log(f"[core_ai] active model: {label}")
 
     def _open_config(self) -> None:
         """Show the configuration / setup log window without quitting chat."""
@@ -448,14 +538,24 @@ class LauncherApp:
             try:
                 session = SessionSetup(self.setup)
                 chat = session.run_full_open(log=lambda m: self.root.after(0, self._append_log, m))
-                agent = AgentService.create(model=session.base_model, host=session.host)
+                router = CoreRouter.from_setup(
+                    self.setup,
+                    local_host=session.host,
+                    api_key=openrouter_api_key(),
+                )
+                # Honor saved selection; missing API key falls back inside router.
+                want = selected_id(self.setup, local_model=session.base_model)
+                router.set_selection(want, reset=True)
+                agent = AgentService.create_with_router(router)
+                self.root.after(0, self._set_router, router)
                 self.root.after(0, self._set_agent, agent)
                 self.root.after(0, self._set_chat_ready, True, chat)
                 self.root.after(
                     0,
                     self._append_log,
-                    "[ready] top-edge bar is active — type, Mic, or say 'hey' to wake. "
-                    "Right-click the bar for Exit / Setup again.",
+                    f"[ready] core AI: {router.active_label}. "
+                    "Top-edge bar active — type, Mic, or say 'hey' to wake. "
+                    "Use the Core AI dropdown to switch models.",
                 )
             except Exception as exc:  # noqa: BLE001
                 self.root.after(0, self._append_log, f"ERROR: {exc}")
@@ -464,6 +564,10 @@ class LauncherApp:
                 self.root.after(0, self._set_busy, False)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _set_router(self, router: CoreRouter | None) -> None:
+        self._router = router
+        self._sync_model_dropdown()
 
     def _on_send(self) -> None:
         if self._busy or not self._chat_ready or self._agent is None:
@@ -491,6 +595,8 @@ class LauncherApp:
                 line = f"[display error] {exc}\n"
             if line:
                 self.root.after(0, self._append_log, line.rstrip("\n"))
+            if kind == "model_switch":
+                self.root.after(0, self._on_model_switched, data)
             if kind == "final" and data:
                 reply = str(data)
                 self.root.after(0, self._on_agent_reply, reply)
@@ -514,6 +620,14 @@ class LauncherApp:
 
     def _on_agent_reply(self, reply: str) -> None:
         self._ensure_bar().set_exchange(self._last_user, reply)
+
+    def _on_model_switched(self, data: Any) -> None:
+        if self._agent is not None:
+            self._on_context_usage(self._agent.context_used)
+        if isinstance(data, dict):
+            label = data.get("label")
+            if label:
+                self._ensure_bar().status_message(f"Switched to {label}")
 
     def run(self) -> None:
         self.root.mainloop()

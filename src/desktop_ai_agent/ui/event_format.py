@@ -44,4 +44,10 @@ def format_event(kind: str, data: Any) -> str:
         return f"[recovered] model wrote a tool call as text: {_clip(data)}\n"
     if kind == "handoff":
         return f"[handoff] context almost full: task continues in a fresh chat (#{data})\n"
+    if kind == "model_switch":
+        if isinstance(data, dict):
+            label = data.get("label") or data.get("selection") or "unknown"
+            reason = data.get("reason") or "context"
+            return f"[model] switched to {label} ({reason})\n"
+        return f"[model] switched to {_clip(data)}\n"
     return ""

@@ -9,9 +9,48 @@
       "/set format json"
     ]
   },
+  "core_ai": {
+    "selected": "local:gemma4",
+    "local_context_tokens": 8192,
+    "openrouter": {
+      "base_url": "https://openrouter.ai/api/v1",
+      "fallback_model": "google/gemini-2.5-flash",
+      "models": [
+        {
+          "id": "openai/gpt-4.1",
+          "label": "GPT-4.1",
+          "context_tokens": 1048576
+        },
+        {
+          "id": "openai/gpt-4o",
+          "label": "GPT-4o",
+          "context_tokens": 128000
+        },
+        {
+          "id": "anthropic/claude-sonnet-4",
+          "label": "Claude Sonnet 4",
+          "context_tokens": 200000
+        },
+        {
+          "id": "google/gemini-2.5-pro",
+          "label": "Gemini 2.5 Pro",
+          "context_tokens": 1048576
+        },
+        {
+          "id": "google/gemini-2.5-flash",
+          "label": "Gemini 2.5 Flash",
+          "context_tokens": 1048576
+        }
+      ]
+    }
+  },
   "folder_index": {
     "enabled": true,
-    "drives": ["C", "D", "E"],
+    "drives": [
+      "C",
+      "D",
+      "E"
+    ],
     "apps": {
       "enabled": true,
       "include_start_menu": true,
@@ -30,11 +69,11 @@
     }
   },
   "ui": {
-    "title": "Desktop AI Agent — Configuration",
+    "title": "Desktop AI Agent \u2014 Configuration",
     "width": 820,
     "height": 640,
     "auto_open": true,
-    "bar_width": 520,
+    "bar_width": 620,
     "bar_auto_hide_ms": 20000,
     "bar_collapsed_height": 28,
     "bar_top_margin": 10
