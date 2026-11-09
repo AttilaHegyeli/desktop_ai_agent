@@ -7,6 +7,8 @@ dist/
 build/
 *.log
 logs/
+.env
+config/secrets.json
 config/program_files_index.json
 config/program_files_index.txt
 config/important_files_index.json
