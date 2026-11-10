@@ -4,6 +4,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 ENV_FILE = ROOT / ".env"
 CONFIG_DIR = ROOT / "config"
+MODELS_DIR = CONFIG_DIR / "models"
+HAND_LANDMARKER_TASK = MODELS_DIR / "hand_landmarker.task"
 SETUP_JSON = CONFIG_DIR / "setup.json"
 SECRETS_JSON = CONFIG_DIR / "secrets.json"
 MODELFILE = CONFIG_DIR / "Modelfile.gemma4-agent"

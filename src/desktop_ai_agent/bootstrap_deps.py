@@ -11,7 +11,7 @@ import sys
 from collections.abc import Callable
 
 # Keep in sync with [project] dependencies + runtime extras in pyproject.toml
-# (voice, screenshot, ui, tts). Dev/pytest stays optional and is not auto-installed.
+# (voice, screenshot, ui, tts, camera). Dev/pytest stays optional and is not auto-installed.
 RUNTIME_PACKAGES: tuple[str, ...] = (
     "Pillow>=10.0",
     "pymupdf>=1.24",
@@ -24,6 +24,8 @@ RUNTIME_PACKAGES: tuple[str, ...] = (
     "pyttsx3>=2.90",
     "edge-tts>=6.1",
     "pygame>=2.5",
+    "opencv-python-headless>=4.8",
+    "mediapipe>=0.10",
 )
 
 LogFn = Callable[[str], None]

@@ -13,4 +13,5 @@ config/program_files_index.json
 config/program_files_index.txt
 config/important_files_index.json
 config/important_files_index.txt
+config/models/
 tryloop.py

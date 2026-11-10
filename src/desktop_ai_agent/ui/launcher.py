@@ -16,6 +16,13 @@ from desktop_ai_agent.core.config_loader import (
 from desktop_ai_agent.core.core_router import CoreRouter
 from desktop_ai_agent.core.model_catalog import parse_selection, selected_id
 from desktop_ai_agent.core.session_setup import SessionSetup
+from desktop_ai_agent.input.hand_tracker import (
+    HandTracker,
+    HandTrackerError,
+    camera_enabled,
+    from_setup as hand_from_setup,
+    hand_tracking_available,
+)
 from desktop_ai_agent.input.voice import (
     PushToTalk,
     VoiceError,
@@ -37,6 +44,7 @@ from desktop_ai_agent.output.tts import (
     tts_enabled,
 )
 from desktop_ai_agent.ui.event_format import format_event
+from desktop_ai_agent.ui.hand_overlay import HandOverlay
 from desktop_ai_agent.ui.overlay_bar import OverlayBar
 
 
@@ -70,6 +78,9 @@ class LauncherApp:
         self._last_user = ""
         self._bar: OverlayBar | None = None
         self._router: CoreRouter | None = None
+        self._camera_enabled = camera_enabled(self.setup)
+        self._hand_tracker: HandTracker | None = None
+        self._hand_overlay: HandOverlay | None = None
 
         self._build()
         self._ensure_bar()
@@ -302,14 +313,98 @@ class LauncherApp:
         self._chat = chat
         bar = self._ensure_bar()
         if ready:
+            # Start camera while the root is still mapped — Tk overlays created
+            # under a withdrawn master are unreliable on Windows.
+            self._start_camera_if_needed()
             self._hide_setup_window()
             bar.set_ready(True)
             self._start_wake_if_needed()
         else:
             bar.set_ready(False)
             self._stop_wake()
+            self._stop_camera()
             self._show_setup_window()
         self._refresh_mic_button()
+
+    def _start_camera_if_needed(self) -> None:
+        if not self._camera_enabled:
+            return
+        if not hand_tracking_available():
+            self._append_log(
+                '[camera] deps missing. Install with: pip install -e ".[camera]"'
+            )
+            return
+        if self._hand_tracker is not None and self._hand_tracker.is_running:
+            if self._hand_overlay is not None:
+                self._hand_overlay.show()
+            return
+        cam = self.setup.get("camera") or {}
+        try:
+            tracker = hand_from_setup(self.setup)
+            tracker.start()
+        except HandTrackerError as exc:
+            self._append_log(f"[camera] {exc}")
+            return
+        self._hand_tracker = tracker
+        opacity = float(cam.get("overlay_opacity", 0.42))
+        show_feed = bool(cam.get("show_feed", True))
+        feed_gain = float(cam.get("feed_gain", 0.75))
+        overlay = HandOverlay(
+            self.root,
+            tracker,
+            opacity=opacity,
+            show_feed=show_feed,
+            feed_gain=feed_gain,
+        )
+
+        def on_first_frame(frame: Any) -> None:
+            n = len(frame.hands)
+            self._append_log(
+                f"[camera] live {frame.width}x{frame.height} — "
+                f"fullscreen self-view on; raise a hand for skeleton (hands={n})"
+            )
+
+        overlay.on_first_frame = on_first_frame
+        self._hand_overlay = overlay
+        overlay.show()
+        self._append_log(
+            "[camera] overlay on — fullscreen shaded self-view + skeleton "
+            "(click-through)"
+        )
+        self.root.after(2500, self._check_camera_error)
+
+    def _check_camera_error(self) -> None:
+        tracker = self._hand_tracker
+        overlay = self._hand_overlay
+        if tracker is None:
+            return
+        err = tracker.last_error
+        if err:
+            self._append_log(f"[camera] {err}")
+            if overlay is not None:
+                overlay.hide()
+            return
+        if overlay is not None and overlay.frames_drawn == 0:
+            latest = tracker.latest()
+            if latest is None:
+                self._append_log(
+                    "[camera] no frames yet — check webcam privacy settings / "
+                    "close apps using the camera"
+                )
+            else:
+                self._append_log(
+                    "[camera] frames received but overlay did not paint — "
+                    "try raising overlay_opacity in config/setup.json"
+                )
+
+    def _stop_camera(self) -> None:
+        if self._hand_overlay is not None:
+            self._hand_overlay.destroy()
+            self._hand_overlay = None
+        tracker = self._hand_tracker
+        self._hand_tracker = None
+        if tracker is not None:
+            tracker.stop()
 
     def _set_agent(self, agent: AgentService | None) -> None:
         self._agent = agent
@@ -514,6 +609,7 @@ class LauncherApp:
 
     def _on_close(self) -> None:
         self._stop_wake()
+        self._stop_camera()
         if self._ptt is not None and self._ptt.is_recording:
             self._ptt.cancel()
         if self._speaker is not None:
@@ -527,6 +623,7 @@ class LauncherApp:
         if self._busy:
             return
         self._stop_wake()
+        self._stop_camera()
         self._set_busy(True)
         self._set_chat_ready(False)
         self._set_agent(None)
