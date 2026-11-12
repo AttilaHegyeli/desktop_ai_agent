@@ -16,6 +16,12 @@ from desktop_ai_agent.core.config_loader import (
 from desktop_ai_agent.core.core_router import CoreRouter
 from desktop_ai_agent.core.model_catalog import parse_selection, selected_id
 from desktop_ai_agent.core.session_setup import SessionSetup
+from desktop_ai_agent.input.hand_mouse import (
+    HandMouseController,
+    controller_from_setup,
+    pointing_enabled,
+    track_rect_from_setup,
+)
 from desktop_ai_agent.input.hand_tracker import (
     HandTracker,
     HandTrackerError,
@@ -79,8 +85,12 @@ class LauncherApp:
         self._bar: OverlayBar | None = None
         self._router: CoreRouter | None = None
         self._camera_enabled = camera_enabled(self.setup)
+        self._pointing_enabled = pointing_enabled(self.setup)
+        # Runtime toggle (persisted to setup.camera.enabled when the Cam button is used).
+        self._camera_on = self._camera_enabled
         self._hand_tracker: HandTracker | None = None
         self._hand_overlay: HandOverlay | None = None
+        self._hand_mouse: HandMouseController | None = None
 
         self._build()
         self._ensure_bar()
@@ -156,6 +166,7 @@ class LauncherApp:
                 self.root,
                 ui=ui if isinstance(ui, dict) else {},
                 voice_enabled=self._voice_enabled,
+                camera_available=hand_tracking_available(),
                 on_send=self._on_send,
                 on_mic=self._on_mic,
                 on_exit=self._on_close,
@@ -164,8 +175,10 @@ class LauncherApp:
                 on_new_chat=self._on_new_chat,
                 on_stop=self._on_stop,
                 on_model_change=self._on_model_change,
+                on_camera_toggle=self._on_camera_toggle,
             )
             self._bar.set_context(0, CONTEXT_TOKENS)
+            self._bar.set_camera_active(self._camera_on)
             self._sync_model_dropdown()
         return self._bar
 
@@ -318,16 +331,49 @@ class LauncherApp:
             self._start_camera_if_needed()
             self._hide_setup_window()
             bar.set_ready(True)
+            bar.set_camera_active(self._camera_on)
             self._start_wake_if_needed()
         else:
             bar.set_ready(False)
+            bar.set_camera_active(False)
             self._stop_wake()
             self._stop_camera()
             self._show_setup_window()
         self._refresh_mic_button()
 
+    def _on_camera_toggle(self) -> None:
+        """Turn camera overlay + hand mouse on/off from the chat bar."""
+        if not self._chat_ready:
+            return
+        if not hand_tracking_available():
+            self._append_log(
+                '[camera] deps missing. Install with: pip install -e ".[camera]"'
+            )
+            self._ensure_bar().status_message("Camera deps missing")
+            return
+        self._camera_on = not self._camera_on
+        self._persist_camera_enabled(self._camera_on)
+        if self._camera_on:
+            self._append_log("[camera] tracking on")
+            self._start_camera_if_needed()
+        else:
+            self._append_log("[camera] tracking off")
+            self._stop_camera()
+        self._ensure_bar().set_camera_active(self._camera_on)
+
+    def _persist_camera_enabled(self, enabled: bool) -> None:
+        cam = dict(self.setup.get("camera") or {})
+        cam["enabled"] = bool(enabled)
+        self.setup["camera"] = cam
+        self._camera_enabled = bool(enabled)
+        self._pointing_enabled = pointing_enabled(self.setup)
+        try:
+            save_setup(self.setup)
+        except Exception:  # noqa: BLE001
+            pass
+
     def _start_camera_if_needed(self) -> None:
-        if not self._camera_enabled:
+        if not self._camera_on:
             return
         if not hand_tracking_available():
             self._append_log(
@@ -337,6 +383,7 @@ class LauncherApp:
         if self._hand_tracker is not None and self._hand_tracker.is_running:
             if self._hand_overlay is not None:
                 self._hand_overlay.show()
+            self._start_hand_mouse_if_needed()
             return
         cam = self.setup.get("camera") or {}
         try:
@@ -344,6 +391,8 @@ class LauncherApp:
             tracker.start()
         except HandTrackerError as exc:
             self._append_log(f"[camera] {exc}")
+            self._camera_on = False
+            self._ensure_bar().set_camera_active(False)
             return
         self._hand_tracker = tracker
         opacity = float(cam.get("overlay_opacity", 0.42))
@@ -355,6 +404,7 @@ class LauncherApp:
             opacity=opacity,
             show_feed=show_feed,
             feed_gain=feed_gain,
+            track_rect=track_rect_from_setup(self.setup),
         )
 
         def on_first_frame(frame: Any) -> None:
@@ -371,7 +421,32 @@ class LauncherApp:
             "[camera] overlay on — fullscreen shaded self-view + skeleton "
             "(click-through)"
         )
+        self._start_hand_mouse_if_needed()
+        self._ensure_bar().set_camera_active(True)
         self.root.after(2500, self._check_camera_error)
+
+    def _start_hand_mouse_if_needed(self) -> None:
+        if not self._pointing_enabled or self._hand_tracker is None:
+            return
+        if self._hand_mouse is not None and self._hand_mouse.is_running:
+            return
+
+        def screen_size() -> tuple[int, int]:
+            return (
+                int(self.root.winfo_screenwidth()),
+                int(self.root.winfo_screenheight()),
+            )
+
+        try:
+            controller = controller_from_setup(
+                self.setup,
+                self._hand_tracker,
+                screen_size=screen_size,
+            )
+            controller.start()
+        except Exception:  # noqa: BLE001
+            return
+        self._hand_mouse = controller
 
     def _check_camera_error(self) -> None:
         tracker = self._hand_tracker
@@ -398,6 +473,9 @@ class LauncherApp:
                 )
 
     def _stop_camera(self) -> None:
+        if self._hand_mouse is not None:
+            self._hand_mouse.stop()
+            self._hand_mouse = None
         if self._hand_overlay is not None:
             self._hand_overlay.destroy()
             self._hand_overlay = None
