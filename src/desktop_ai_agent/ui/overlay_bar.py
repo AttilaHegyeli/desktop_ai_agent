@@ -345,6 +345,8 @@ class OverlayBar:
         on_new_chat: Callable[[], None] | None = None,
         on_stop: Callable[[], None] | None = None,
         on_model_change: Callable[[str], None] | None = None,
+        on_camera_toggle: Callable[[], None] | None = None,
+        camera_available: bool = False,
     ) -> None:
         cfg = ui or {}
         # Prefer an explicit width; otherwise size from the screen so the chat
@@ -372,6 +374,9 @@ class OverlayBar:
         self._on_new_chat = on_new_chat
         self._on_stop = on_stop
         self._on_model_change = on_model_change
+        self._on_camera_toggle = on_camera_toggle
+        self._camera_available = bool(camera_available)
+        self._camera_on = False
         self._voice_enabled = voice_enabled
         self._model_labels: list[str] = []
         self._model_ids: list[str] = []
@@ -581,6 +586,21 @@ class OverlayBar:
         )
         self.new_chat_btn.pack(side=tk.LEFT, padx=(0, 6))
 
+        self.camera_btn = RoundButton(
+            self._header,
+            icon="camera",
+            icon_size=15,
+            command=self._fire_camera,
+            diameter=30,
+            fill=self._circle,
+            fg=_MUTED,
+            active_fill=_ACCENT_SOFT,
+            stroke=self._circle,
+        )
+        self.camera_btn.pack(side=tk.LEFT, padx=(0, 6))
+        if not self._camera_available:
+            self.camera_btn.set_style(enabled=False)
+
         self.cfg_btn = RoundButton(
             self._header,
             icon="settings",
@@ -715,6 +735,7 @@ class OverlayBar:
 
         menu = tk.Menu(self.win, tearoff=0)
         menu.add_command(label="New chat", command=self._fire_new_chat)
+        menu.add_command(label="Toggle camera", command=self._fire_camera)
         menu.add_command(label="Configuration", command=self._fire_config)
         menu.add_command(label="Close chat", command=self._fire_close_chat)
         menu.add_separator()
@@ -744,6 +765,7 @@ class OverlayBar:
             self.mic_btn,
             self.send_btn,
             self.new_chat_btn,
+            self.camera_btn,
             self.cfg_btn,
             self.close_btn,
         )
@@ -903,6 +925,10 @@ class OverlayBar:
     def _fire_new_chat(self) -> None:
         if self._ready and not self._busy and self._on_new_chat:
             self._on_new_chat()
+
+    def _fire_camera(self) -> None:
+        if self._ready and self._camera_available and self._on_camera_toggle:
+            self._on_camera_toggle()
 
     def _fire_mic(self) -> None:
         if self._on_mic:
@@ -1756,6 +1782,7 @@ class OverlayBar:
             fg=_MUTED,
             active_fill=_ACCENT_SOFT if ok else circle,
         )
+        self.set_camera_active(self._camera_on)
         if self._voice_enabled and self._busy:
             self.mic_btn.set_style(
                 text="",
@@ -1764,6 +1791,30 @@ class OverlayBar:
                 fg=_MUTED,
                 active_fill=circle,
                 enabled=False,
+            )
+
+    def set_camera_active(self, active: bool) -> None:
+        """Style the camera toggle: accent when tracking is on."""
+        self._camera_on = bool(active)
+        if not self._camera_available:
+            self.camera_btn.set_style(enabled=False)
+            return
+        circle = self._circle
+        if self._camera_on:
+            self.camera_btn.set_style(
+                icon="camera",
+                enabled=self._ready,
+                fill=_ACCENT_SOFT,
+                fg=_ACCENT,
+                active_fill=_ACCENT_SOFT,
+            )
+        else:
+            self.camera_btn.set_style(
+                icon="camera",
+                enabled=self._ready,
+                fill=circle,
+                fg=_MUTED,
+                active_fill=_ACCENT_SOFT,
             )
 
     def set_mic_phase(self, phase: str, *, can_start: bool) -> None:

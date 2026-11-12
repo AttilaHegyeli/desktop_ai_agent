@@ -13,7 +13,8 @@ from desktop_ai_agent.input.hand_tracker import (
 
 _SKELETON = (0, 255, 180)
 _JOINT = (255, 255, 255)
-_INDEX_TIP = (255, 80, 80)
+_INDEX_TIP = (255, 160, 60)  # orange-ish index tip
+_THUMB_TIP = (255, 40, 40)  # bright red thumb point
 _FEED_GAIN = 0.75
 _PAINT_MS = 50
 _RENDER_MAX_SIDE = 960
@@ -35,6 +36,7 @@ class HandOverlay:
         opacity: float = 0.42,
         show_feed: bool = True,
         feed_gain: float = _FEED_GAIN,
+        track_rect: tuple[float, float, float, float] | None = None,
     ) -> None:
         self._master = master
         self._tracker = tracker
@@ -42,6 +44,8 @@ class HandOverlay:
         self.opacity = max(0.12, min(0.9, float(opacity)))
         self.show_feed = bool(show_feed)
         self.feed_gain = max(0.25, min(1.0, float(feed_gain)))
+        # track_rect kept for API compat; mapping is in hand_mouse (not drawn).
+        self.track_rect = track_rect
 
         self._win: tk.Toplevel | None = None
         self._label: tk.Label | None = None
@@ -236,7 +240,7 @@ def compose_overlay_rgb(
 
     if frame is not None and frame.hands:
         for hand in frame.hands:
-            _draw_hand(out, hand.landmarks, hand.index_tip)
+            _draw_hand(out, hand.landmarks, hand.index_tip, hand.thumb_tip)
 
     if w != target_w or h != target_h:
         out = cv2.resize(out, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
@@ -289,6 +293,7 @@ def _draw_hand(
     canvas: Any,
     landmarks: tuple[Landmark, ...],
     index_tip: Landmark,
+    thumb_tip: Landmark | None = None,
 ) -> None:
     import cv2
 
@@ -298,11 +303,17 @@ def _draw_hand(
         if 0 <= a < len(pts) and 0 <= b < len(pts):
             cv2.line(canvas, pts[a], pts[b], _SKELETON, 3, lineType=cv2.LINE_AA)
     for i, p in enumerate(pts):
-        color = _INDEX_TIP if i == 8 else _JOINT
-        radius = 6 if i == 8 else 4
-        cv2.circle(canvas, p, radius, color, -1, lineType=cv2.LINE_AA)
-    tip = (int(index_tip.x * w), int(index_tip.y * h))
-    cv2.circle(canvas, tip, 10, _INDEX_TIP, 2, lineType=cv2.LINE_AA)
+        if i in (4, 8):
+            continue  # drawn as highlighted tips below
+        cv2.circle(canvas, p, 4, _JOINT, -1, lineType=cv2.LINE_AA)
+    idx = (int(index_tip.x * w), int(index_tip.y * h))
+    cv2.circle(canvas, idx, 8, _INDEX_TIP, -1, lineType=cv2.LINE_AA)
+    cv2.circle(canvas, idx, 11, _INDEX_TIP, 2, lineType=cv2.LINE_AA)
+    thumb = thumb_tip if thumb_tip is not None else (landmarks[4] if len(landmarks) > 4 else None)
+    if thumb is not None:
+        th = (int(thumb.x * w), int(thumb.y * h))
+        cv2.circle(canvas, th, 10, _THUMB_TIP, -1, lineType=cv2.LINE_AA)
+        cv2.circle(canvas, th, 14, _THUMB_TIP, 2, lineType=cv2.LINE_AA)
 
 
 def _rgb_to_photo(rgb: Any, *, master: tk.Misc | None = None) -> tk.PhotoImage:

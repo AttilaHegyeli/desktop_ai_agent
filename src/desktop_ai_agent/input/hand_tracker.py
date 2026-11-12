@@ -1,7 +1,7 @@
 """Webcam hand landmark tracking via OpenCV + MediaPipe Tasks HandLandmarker.
 
 Optional deps: pip install -e ".[camera]"
-Detection only — no click/type. ``HandFrame.index_tip`` is for a later laser branch.
+``HandFrame.index_tip`` / thumb tip feed the hand-mouse controller (action layer).
 """
 from __future__ import annotations
 
@@ -41,6 +41,7 @@ HAND_CONNECTIONS: tuple[tuple[int, int], ...] = (
     (13, 17),
 )
 
+THUMB_TIP = 4
 INDEX_TIP = 8
 _NUM_LANDMARKS = 21
 _INSTALL_HINT = 'pip install -e ".[camera]"'
@@ -77,6 +78,10 @@ class HandLandmarks:
     @property
     def index_tip(self) -> Landmark:
         return self.landmarks[INDEX_TIP]
+
+    @property
+    def thumb_tip(self) -> Landmark:
+        return self.landmarks[THUMB_TIP]
 
 
 @dataclass(frozen=True)
