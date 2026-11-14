@@ -100,6 +100,16 @@ def context_meter_state(used: int, limit: int) -> tuple[float, str, str, str]:
     return frac, short, detail, color
 
 
+def clamp_position(
+    x: int, y: int, width: int, height: int, screen_w: int, screen_h: int
+) -> tuple[int, int]:
+    """Keep a window of the given size fully on-screen."""
+    return (
+        max(0, min(x, max(0, screen_w - width))),
+        max(0, min(y, max(0, screen_h - height))),
+    )
+
+
 def clip_line(text: str, max_chars: int = 120) -> str:
     """Single-line clip for the short YOU row (AI text uses the scroll panel instead)."""
     text = (text or "").replace("\n", " ").strip()
@@ -347,6 +357,8 @@ class OverlayBar:
         on_model_change: Callable[[str], None] | None = None,
         on_camera_toggle: Callable[[], None] | None = None,
         camera_available: bool = False,
+        on_mute_toggle: Callable[[], None] | None = None,
+        wake_available: bool = False,
     ) -> None:
         cfg = ui or {}
         # Prefer an explicit width; otherwise size from the screen so the chat
@@ -377,6 +389,9 @@ class OverlayBar:
         self._on_camera_toggle = on_camera_toggle
         self._camera_available = bool(camera_available)
         self._camera_on = False
+        self._wake_available = bool(wake_available)
+        self._wake_muted = False
+        self._on_mute_toggle = on_mute_toggle
         self._voice_enabled = voice_enabled
         self._model_labels: list[str] = []
         self._model_ids: list[str] = []
@@ -411,6 +426,11 @@ class OverlayBar:
         self._meter_target = 0.0
         self._meter_job: str | None = None
         self._meter_hover = False
+        # Drag-to-move: (center_x, top_y) kept for the whole app run; None = default
+        # top-center. Shared by the nub and the expanded bar; reset only on restart.
+        self._custom_pos: tuple[int, int] | None = None
+        self._drag_offset: tuple[int, int] | None = None
+        self._dragging = False
 
         self.win = tk.Toplevel(master)
         self.win.overrideredirect(True)
@@ -573,6 +593,9 @@ class OverlayBar:
         )
         self.model_btn.pack(side=tk.LEFT)
 
+        # Slim row under the composer: camera + wake-word mute toggles.
+        self._tools = tk.Frame(self._body, bg=_CARD, highlightthickness=0)
+
         self.new_chat_btn = RoundButton(
             self._header,
             icon="new_chat",
@@ -587,7 +610,7 @@ class OverlayBar:
         self.new_chat_btn.pack(side=tk.LEFT, padx=(0, 6))
 
         self.camera_btn = RoundButton(
-            self._header,
+            self._tools,
             icon="camera",
             icon_size=15,
             command=self._fire_camera,
@@ -600,6 +623,21 @@ class OverlayBar:
         self.camera_btn.pack(side=tk.LEFT, padx=(0, 6))
         if not self._camera_available:
             self.camera_btn.set_style(enabled=False)
+
+        # Wake-word mute (only shown when wake-word listening is configured).
+        self.mute_btn = RoundButton(
+            self._tools,
+            icon="voice",
+            icon_size=15,
+            command=self._fire_mute,
+            diameter=30,
+            fill=self._circle,
+            fg=_MUTED,
+            active_fill=_ACCENT_SOFT,
+            stroke=self._circle,
+        )
+        if self._wake_available:
+            self.mute_btn.pack(side=tk.LEFT, padx=(0, 6))
 
         self.cfg_btn = RoundButton(
             self._header,
@@ -636,6 +674,7 @@ class OverlayBar:
             bd=0,
         )
         self._top.pack(fill=tk.X, padx=18, pady=(0, 4))
+        self._tools.pack(fill=tk.X, padx=18, pady=(2, 4), anchor=tk.W)
         self._input_focused = False
         self._input_shape = self._top.create_polygon(
             24, 1, 400, 1, 420, 1, 440, 1, 440, 49, 420, 49, 400, 49, 24, 49,
@@ -681,6 +720,20 @@ class OverlayBar:
         )
         self._top.bind("<Configure>", self._layout_composer, add="+")
         self._top.bind("<Button-1>", lambda _e: self.focus_prompt(), add="+")
+        self._bind_drag(
+            self._canvas,
+            self._body,
+            self._exchange,
+            self._exchange_text,
+            self._me_lbl,
+            self._ai_hdr,
+            self._header,
+            self._brand_mark,
+            self._brand_text,
+            self._brand_title,
+            self._top,
+            self._tools,
+        )
         self.prompt.bind("<Return>", lambda _e: self._fire_send())
         self.prompt.bind("<Up>", lambda e: self._history_step(-1))
         self.prompt.bind("<Down>", lambda e: self._history_step(1))
@@ -736,6 +789,8 @@ class OverlayBar:
         menu = tk.Menu(self.win, tearoff=0)
         menu.add_command(label="New chat", command=self._fire_new_chat)
         menu.add_command(label="Toggle camera", command=self._fire_camera)
+        if self._wake_available:
+            menu.add_command(label="Mute / unmute wake word", command=self._fire_mute)
         menu.add_command(label="Configuration", command=self._fire_config)
         menu.add_command(label="Close chat", command=self._fire_close_chat)
         menu.add_separator()
@@ -760,12 +815,14 @@ class OverlayBar:
             self._meter,
             self._meter_lbl,
             self._top,
+            self._tools,
             self._prompt_icon,
             self.prompt,
             self.mic_btn,
             self.send_btn,
             self.new_chat_btn,
             self.camera_btn,
+            self.mute_btn,
             self.cfg_btn,
             self.close_btn,
         )
@@ -929,6 +986,10 @@ class OverlayBar:
     def _fire_camera(self) -> None:
         if self._ready and self._camera_available and self._on_camera_toggle:
             self._on_camera_toggle()
+
+    def _fire_mute(self) -> None:
+        if self._ready and self._wake_available and self._on_mute_toggle:
+            self._on_mute_toggle()
 
     def _fire_mic(self) -> None:
         if self._on_mic:
@@ -1474,13 +1535,15 @@ class OverlayBar:
             self._cancel_leave()
             self._cancel_auto_hide()
             return
+        if self._dragging:
+            return
         self._pointer_inside = False
         self._cancel_leave()
         self._leave_job = self.win.after(self._leave_grace_ms, self._maybe_collapse_after_leave)
 
     def _maybe_collapse_after_leave(self) -> None:
         self._leave_job = None
-        if self._model_menu_open:
+        if self._model_menu_open or self._dragging:
             return
         if self._pointer_inside:
             return
@@ -1511,7 +1574,13 @@ class OverlayBar:
 
     def _auto_hide(self) -> None:
         self._hide_job = None
-        if self._model_menu_open or self._pointer_inside or self._busy or self._is_typing():
+        if (
+            self._model_menu_open
+            or self._dragging
+            or self._pointer_inside
+            or self._busy
+            or self._is_typing()
+        ):
             return
         if self.win.focus_get() == self.prompt:
             return
@@ -1521,9 +1590,57 @@ class OverlayBar:
         sw = self.win.winfo_screenwidth()
         return max(0, (sw - width) // 2)
 
+    def _bind_drag(self, *widgets: tk.Misc) -> None:
+        """Let empty card surfaces drag the whole window."""
+        for w in widgets:
+            w.bind("<ButtonPress-1>", self._drag_start, add="+")
+            w.bind("<B1-Motion>", self._drag_move, add="+")
+            w.bind("<ButtonRelease-1>", self._drag_end, add="+")
+
+    def _drag_start(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        if self._mode == "collapsed":
+            return
+        self._drag_offset = (
+            event.x_root - self.win.winfo_x(),
+            event.y_root - self.win.winfo_y(),
+        )
+
+    def _drag_move(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        if self._drag_offset is None:
+            return
+        if not self._dragging:
+            self._dragging = True
+            self._close_model_menu()
+        x, y = clamp_position(
+            event.x_root - self._drag_offset[0],
+            event.y_root - self._drag_offset[1],
+            self.win.winfo_width(),
+            self.win.winfo_height(),
+            self.win.winfo_screenwidth(),
+            self.win.winfo_screenheight(),
+        )
+        # Store horizontal CENTER + top, so the nub and the expanded bar line up.
+        self._custom_pos = (x + self.win.winfo_width() // 2, y)
+        self.win.geometry(f"+{x}+{y}")
+
+    def _drag_end(self, _event: tk.Event | None = None) -> None:  # type: ignore[type-arg]
+        self._drag_offset = None
+        self._dragging = False
+
     def _place(self, width: int, height: int, *, top_gap: bool) -> None:
-        x = self._screen_center_x(width)
-        y = self._top_margin if top_gap else 0
+        if self._custom_pos is not None:
+            # The nub (top_gap False) follows the bar, so it uses the same spot.
+            x, y = clamp_position(
+                self._custom_pos[0] - width // 2,
+                self._custom_pos[1],
+                width,
+                height,
+                self.win.winfo_screenwidth(),
+                self.win.winfo_screenheight(),
+            )
+        else:
+            x = self._screen_center_x(width)
+            y = self._top_margin if top_gap else 0
         self.win.geometry(f"{width}x{height}+{x}+{y}")
         self._canvas.configure(width=width, height=height)
 
@@ -1783,6 +1900,7 @@ class OverlayBar:
             active_fill=_ACCENT_SOFT if ok else circle,
         )
         self.set_camera_active(self._camera_on)
+        self.set_wake_muted(self._wake_muted)
         if self._voice_enabled and self._busy:
             self.mic_btn.set_style(
                 text="",
@@ -1814,6 +1932,28 @@ class OverlayBar:
                 enabled=self._ready,
                 fill=circle,
                 fg=_MUTED,
+                active_fill=_ACCENT_SOFT,
+            )
+
+    def set_wake_muted(self, muted: bool) -> None:
+        """Style the wake-word mute toggle: red slashed mic when muted."""
+        self._wake_muted = bool(muted)
+        if not self._wake_available:
+            return
+        if self._wake_muted:
+            self.mute_btn.set_style(
+                icon="mute",
+                enabled=self._ready,
+                fill=_DANGER_SOFT,
+                fg=_DANGER,
+                active_fill=_DANGER_HI,
+            )
+        else:
+            self.mute_btn.set_style(
+                icon="voice",
+                enabled=self._ready,
+                fill=_ACCENT_SOFT,
+                fg=_ACCENT,
                 active_fill=_ACCENT_SOFT,
             )
 
