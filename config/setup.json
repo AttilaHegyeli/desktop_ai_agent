@@ -79,7 +79,7 @@
     "bar_top_margin": 10
   },
   "camera": {
-    "enabled": true,
+    "enabled": false,
     "device_index": 0,
     "width": 1920,
     "height": 1080,

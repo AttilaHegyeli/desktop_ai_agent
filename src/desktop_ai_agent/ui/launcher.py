@@ -76,6 +76,7 @@ class LauncherApp:
         self._engine: WhisperEngine | None = None
         self._ptt: PushToTalk | None = None
         self._wake: WakeListener | None = None
+        self._wake_muted = False  # user mute: wake listener stopped, mic stream released
         self._mic_phase = "idle"  # idle | recording | transcribing
         self._tts_enabled = tts_enabled(self.setup)
         self._speaker: Speaker | None = None
@@ -176,7 +177,10 @@ class LauncherApp:
                 on_stop=self._on_stop,
                 on_model_change=self._on_model_change,
                 on_camera_toggle=self._on_camera_toggle,
+                on_mute_toggle=self._on_mute_toggle,
+                wake_available=self._voice_enabled and self._wake_enabled,
             )
+            self._bar.set_wake_muted(self._wake_muted)
             self._bar.set_context(0, CONTEXT_TOKENS)
             self._bar.set_camera_active(self._camera_on)
             self._sync_model_dropdown()
@@ -533,7 +537,7 @@ class LauncherApp:
         return self._ptt
 
     def _start_wake_if_needed(self) -> None:
-        if not self._voice_enabled or not self._wake_enabled:
+        if not self._voice_enabled or not self._wake_enabled or self._wake_muted:
             return
         if not voice_available():
             self._append_log(
@@ -562,6 +566,19 @@ class LauncherApp:
         except VoiceError as exc:
             self._append_log(f"[voice] {exc}")
             self._wake = None
+
+    def _on_mute_toggle(self) -> None:
+        """Mute/unmute the wake word. Muting stops the listener and frees the mic."""
+        if not self._chat_ready or not self._voice_enabled or not self._wake_enabled:
+            return
+        self._wake_muted = not self._wake_muted
+        if self._wake_muted:
+            self._stop_wake()
+            self._append_log("[voice] wake word muted")
+        else:
+            self._start_wake_if_needed()
+            self._append_log("[voice] wake word unmuted")
+        self._ensure_bar().set_wake_muted(self._wake_muted)
 
     def _stop_wake(self) -> None:
         wake = self._wake

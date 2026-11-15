@@ -2,10 +2,23 @@ import unittest
 
 from desktop_ai_agent.ui.overlay_bar import (
     OverlayBar,
+    clamp_position,
     clip_line,
     context_meter_state,
     format_exchange_lines,
 )
+
+
+class TestClampPosition(unittest.TestCase):
+    def test_inside_unchanged(self):
+        self.assertEqual(clamp_position(100, 50, 600, 128, 1920, 1080), (100, 50))
+
+    def test_clamped_to_edges(self):
+        self.assertEqual(clamp_position(-30, -5, 600, 128, 1920, 1080), (0, 0))
+        self.assertEqual(clamp_position(1800, 1000, 600, 128, 1920, 1080), (1320, 952))
+
+    def test_window_larger_than_screen(self):
+        self.assertEqual(clamp_position(50, 50, 2000, 1200, 1920, 1080), (0, 0))
 
 
 class TestFormatExchangeLines(unittest.TestCase):
