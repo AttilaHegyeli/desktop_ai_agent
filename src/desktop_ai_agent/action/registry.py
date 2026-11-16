@@ -342,6 +342,29 @@ def build_default_registry() -> ActionRegistry:
                 ),
             ),
             ActionSpec(
+                name="list_windows",
+                description=(
+                    "List the open windows (title, program, minimized/maximized) as numbered lines, "
+                    "front first. Use it when you need a window's number for window_control."
+                ),
+                risk=Risk.LOW,
+            ),
+            ActionSpec(
+                name="window_control",
+                description=(
+                    "Focus (bring to front), minimize, maximize, restore or close an open window, "
+                    "by name (title or program, e.g. spotify) or by number from list_windows. "
+                    "If several or no windows match, nothing changes and you get numbered windows "
+                    "to choose from. close works like the window's X button."
+                ),
+                risk=Risk.MEDIUM,
+                params=(
+                    Param("action", "string", "What to do", enum=("focus", "minimize", "maximize", "restore", "close")),
+                    Param("name", "string", "Window title or program name; pass this or number", required=False, max_length=100),
+                    Param("number", "integer", "Window number from the latest list; pass this or name", required=False, minimum=1),
+                ),
+            ),
+            ActionSpec(
                 name="move_mouse",
                 description=(
                     "Move the mouse pointer onto one element from the latest list_elements "

@@ -94,6 +94,16 @@ def filter_area(
     return [e for e in elements if e.hwnd == hwnd]
 
 
+def by_window_order(elements: list[UiElement], z_order: list[int]) -> list[UiElement]:
+    """Front window's elements first; screen order kept inside a window.
+
+    `z_order` is window handles, front first. Elements of a window not in it (unknown
+    handle) go last, so a failed lookup never hides anything, it only stops sorting.
+    """
+    rank = {hwnd: i for i, hwnd in enumerate(z_order)}
+    return sorted(elements, key=lambda e: rank.get(e.hwnd, len(rank)))
+
+
 def risky_word(name: str) -> str | None:
     match = _RISKY.search(name or "")
     return match.group(0) if match else None
@@ -127,6 +137,9 @@ def list_elements(area: str = "active", request: str = "") -> dict[str, Any]:
     elements = _scan(_bounds(monitors))
     picked = filter_area(elements, area, _foreground() if area == "active" else None)
     named = [e for e in picked if e.name]  # the model matches by name, so unnamed ones are useless
+    if area == "all":
+        named = by_window_order(named, _z_order())
+    # Stable sort: the request decides first; window order and screen order break ties.
     shown = rank_by_request(named, request, lambda e: e.name)[:MAX_LISTED]
     # Only "all" spans several windows. The other areas hold one window, named once by
     # the `window` field (active) or by the area itself (taskbar, desktop).
@@ -288,6 +301,15 @@ def _scan(bounds: tuple[int, int, int, int] | None) -> list[UiElement]:  # pragm
     from desktop_ai_agent.input.ui_elements import list_ui_elements
 
     return list_ui_elements(bounds=bounds)
+
+
+def _z_order() -> list[int]:  # pragma: no cover - needs Windows
+    from desktop_ai_agent.input.windows import z_order
+
+    try:
+        return z_order()
+    except OSError:
+        return []  # no order known: the list keeps screen order
 
 
 def _foreground() -> tuple[int, str] | None:  # pragma: no cover

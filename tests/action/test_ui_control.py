@@ -31,6 +31,8 @@ class Case(unittest.TestCase):
         self.now = 1000.0
         self.cursor = []
         self.foreground = (EDGE, "Chrome_WidgetWin_1")
+        self.z = [TASKBAR, EDGE, DESKTOP]  # window stack, front first
+        self.z_calls = 0
         self.scans = 0
         self.pointer = (900, 500)  # where the user's mouse is before we act
         self.clicks = []
@@ -43,6 +45,7 @@ class Case(unittest.TestCase):
         patches = [
             mock.patch.object(ui_control, "_scan", side_effect=scan),
             mock.patch.object(ui_control, "_foreground", side_effect=lambda: self.foreground),
+            mock.patch.object(ui_control, "_z_order", side_effect=self.read_z),
             mock.patch.object(ui_control, "_monitors", side_effect=lambda: [MONITOR]),
             mock.patch.object(ui_control, "_now", side_effect=lambda: self.now),
             mock.patch.object(ui_control, "_set_cursor", side_effect=lambda x, y: self.cursor.append((x, y))),
@@ -56,6 +59,44 @@ class Case(unittest.TestCase):
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
+
+    def read_z(self):
+        self.z_calls += 1
+        return list(self.z)
+
+
+class TestWindowOrder(Case):
+    def headers(self, result):
+        return [ln for ln in result["elements"].splitlines() if ln.startswith("[")]
+
+    def test_all_lists_the_front_window_first(self):
+        self.z = [EDGE, DESKTOP, TASKBAR]
+        result = ui_control.list_elements("all")
+        self.assertEqual(self.headers(result), ["[New tab - Microsoft Edge]", "[desktop]", "[taskbar]"])
+
+    def test_the_request_still_beats_window_order(self):
+        self.z = [EDGE, DESKTOP, TASKBAR]
+        result = ui_control.list_elements("all", request="recycle bin")
+        self.assertEqual(result["elements"].splitlines()[:2], ["[desktop]", '5: ListItem "Recycle Bin" (top-left)'])
+        self.assertEqual(self.headers(result)[1:], ["[New tab - Microsoft Edge]", "[taskbar]"])  # ties: front first
+
+    def test_the_front_window_fills_the_cut_first(self):
+        self.screen = [UiElement(i, f"Icon {i}", "ListItem", "desktop", 0, i, 10, i + 10, DESKTOP) for i in range(1, 80)]
+        self.screen.append(UiElement(500, "New Tab", "Button", "New tab - Microsoft Edge", 300, 0, 340, 30, EDGE))
+        self.z = [EDGE, DESKTOP]
+        self.assertEqual(ui_control.list_elements("all")["elements"].splitlines()[1], '500: Button "New Tab" (top-left)')
+
+    def test_unknown_windows_go_last_and_no_order_keeps_screen_order(self):
+        edge = [e for e in SCREEN if e.hwnd == EDGE]
+        self.assertEqual(ui_control.by_window_order(SCREEN, [EDGE]), edge + [e for e in SCREEN if e.hwnd != EDGE])
+        self.assertEqual(ui_control.by_window_order(SCREEN, []), SCREEN)
+
+    def test_only_area_all_reads_the_window_stack(self):
+        for area in ("active", "taskbar", "desktop"):
+            ui_control.list_elements(area)
+        self.assertEqual(self.z_calls, 0)
+        ui_control.list_elements("all")
+        self.assertEqual(self.z_calls, 1)
 
 
 class TestListElements(Case):

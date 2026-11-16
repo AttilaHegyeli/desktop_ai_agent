@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from desktop_ai_agent.action.tools import ui_control as _ui_control
+from desktop_ai_agent.action.tools import window_control as _window_control
 from desktop_ai_agent.action.tools.screenshot import capture_screen
 from desktop_ai_agent.action.tools.web_open import open_url as _open_url
 from desktop_ai_agent.action.tools.web_search import search_web as _search_web
@@ -55,6 +56,16 @@ def web_open(args: dict[str, Any]) -> dict[str, Any]:
 def list_elements(args: dict[str, Any]) -> dict[str, Any]:
     """Numbered list of visible clickable elements (UI Automation), matches to the request first."""
     return _ui_control.list_elements(args.get("area", "active"), args.get("request", ""))
+
+
+def list_windows(args: dict[str, Any]) -> dict[str, Any]:
+    """Numbered open windows, front first. Our own app is left out."""
+    return _window_control.list_windows()
+
+
+def window_control(args: dict[str, Any]) -> dict[str, Any]:
+    """Focus / minimize / maximize / restore / close one window, by name or number."""
+    return _window_control.window_control(args["action"], args.get("name"), args.get("number"))
 
 
 def move_mouse(args: dict[str, Any]) -> dict[str, Any]:
@@ -178,6 +189,8 @@ HANDLERS = {
     "web_search": web_search,
     "web_open": web_open,
     "list_elements": list_elements,
+    "list_windows": list_windows,
+    "window_control": window_control,
     "move_mouse": move_mouse,
     "click": click,
     "type_text": type_text,

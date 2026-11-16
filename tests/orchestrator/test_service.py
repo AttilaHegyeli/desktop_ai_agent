@@ -99,6 +99,13 @@ class TestService(unittest.TestCase):
         self.assertEqual(mouse_safety._click_times, [])
         self.assertEqual(mouse_safety._locked_until, 0.0)
 
+    def test_reset_also_forgets_the_window_list(self):
+        from desktop_ai_agent.action.tools import window_control
+
+        window_control._last = object()  # type: ignore[assignment]
+        AgentService(FakeClient(), executor()).reset()
+        self.assertIsNone(window_control._last)
+
     def test_create_builds_default_stack(self):
         service = AgentService.create(audit_path=None)
         self.assertIn("wait", service.executor.registry.names())
