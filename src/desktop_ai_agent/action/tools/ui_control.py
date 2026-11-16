@@ -121,22 +121,26 @@ def list_elements(area: str = "active") -> dict[str, Any]:
     monitors = _monitors()
     elements = _scan(_bounds(monitors))
     picked = filter_area(elements, area, _foreground() if area == "active" else None)
-    text, listed = format_for_model(picked, max_items=MAX_LISTED, screen=_bounds(monitors))
-
-    shown = [e for e in picked if e.name][:listed]
+    named = [e for e in picked if e.name]  # the model matches by name, so unnamed ones are useless
+    shown = named[:MAX_LISTED]
+    # Only "all" spans several windows. The other areas hold one window, named once by
+    # the `window` field (active) or by the area itself (taskbar, desktop).
+    text, listed = format_for_model(shown, screen=_bounds(monitors), group_by_window=area == "all")
     _last, _cleared_by = _LastList({e.id: e for e in shown}, _now()), None
 
-    result: dict[str, Any] = {"area": area, "count": listed, "elements": text}
+    result: dict[str, Any] = {"area": area}
     if area == "active":
-        result["window"] = next((e.app for e in picked if e.app), None)
+        result["window"] = next((e.app for e in picked if e.app), None)  # read before the list
+    result["count"] = listed
+    result["elements"] = text
     if not listed:
         result["note"] = (
             f"No named clickable elements in area '{area}'. Try another area "
             "(taskbar, desktop, all) or take a screenshot."
         )
-    elif listed < (named := sum(1 for e in picked if e.name)):
+    elif listed < len(named):
         result["note"] = (
-            f"Showing {listed} of {named} elements. If the one you need "
+            f"Showing {listed} of {len(named)} elements. If the one you need "
             "is missing, use a narrower area (taskbar, desktop) or take a screenshot."
         )
     return result

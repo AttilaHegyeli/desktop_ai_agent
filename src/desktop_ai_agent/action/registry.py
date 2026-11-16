@@ -277,9 +277,10 @@ def build_default_registry() -> ActionRegistry:
                 name="list_elements",
                 description=(
                     "List the clickable elements visible on screen (buttons, icons, menu items, "
-                    "tabs, links, text boxes) as numbered lines with name, window and rough "
-                    "position. area: active = the window in front (default), taskbar, desktop "
-                    "(desktop icons), all. Call this before move_mouse."
+                    "tabs, links, text boxes) as numbered lines with name and rough position. "
+                    "area: active = the window in front (default), taskbar, desktop "
+                    "(desktop icons), all (grouped under [window] headers). "
+                    "Call this before move_mouse."
                 ),
                 risk=Risk.LOW,
                 params=(

@@ -62,13 +62,46 @@ class TestListElements(Case):
     def test_active_window_only(self):
         result = ui_control.list_elements("active")
         self.assertEqual(result["count"], 1)  # the unnamed Edge button is not listed
-        self.assertEqual(result["elements"], '3: Button "New Tab" (New tab - Microsoft Edge, top-left)')
+        self.assertEqual(result["elements"], '3: Button "New Tab" (top-left)')
 
     def test_desktop_in_front_means_desktop_icons(self):
         self.foreground = (999, "WorkerW")
         result = ui_control.list_elements()
-        self.assertIn('5: ListItem "Recycle Bin" (desktop, top-left)', result["elements"])
-        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["elements"], '5: ListItem "Recycle Bin" (top-left)')
+        self.assertEqual((result["count"], result["window"]), (1, "desktop"))
+
+    def test_the_active_window_is_named_once_and_before_the_list(self):
+        self.screen += [UiElement(i, f"Tab {i}", "TabItem", "New tab - Microsoft Edge", i * 10, 0, i * 10 + 8, 30, EDGE)
+                        for i in range(10, 40)]
+        result = ui_control.list_elements("active")
+        self.assertEqual(result["count"], 31)
+        self.assertEqual(list(result), ["area", "window", "count", "elements"])
+        self.assertEqual(json.dumps(result).count("New tab - Microsoft Edge"), 1)
+
+    def test_taskbar_lines_do_not_repeat_the_area(self):
+        result = ui_control.list_elements("taskbar")
+        self.assertEqual(result["elements"].splitlines(),
+                         ['1: Button "Start" (bottom-left)', '2: Button "Headphones: 43%" (bottom-right)'])
+        self.assertEqual(json.dumps(result).count("taskbar"), 1)  # only the area field
+
+    def test_all_groups_elements_under_one_header_per_window(self):
+        result = ui_control.list_elements("all")
+        self.assertEqual(result["elements"].splitlines(), [
+            "[taskbar]",
+            '1: Button "Start" (bottom-left)',
+            '2: Button "Headphones: 43%" (bottom-right)',
+            "[New tab - Microsoft Edge]",
+            '3: Button "New Tab" (top-left)',
+            "[desktop]",
+            '5: ListItem "Recycle Bin" (top-left)',
+        ])
+        self.assertEqual(result["count"], 4)  # headers are not counted
+        self.assertNotIn("window", result)
+
+    def test_numbers_from_a_grouped_list_still_work(self):
+        ui_control.list_elements("all")
+        ui_control.move_mouse(5)
+        self.assertEqual(self.cursor, [(38, 40)])
 
     def test_taskbar_desktop_and_all(self):
         self.assertEqual(ui_control.list_elements("taskbar")["count"], 2)

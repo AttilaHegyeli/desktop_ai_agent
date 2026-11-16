@@ -186,31 +186,47 @@ def position_label(el: UiElement, screen: tuple[int, int, int, int]) -> str:
     return f"{vertical}-{horizontal}"
 
 
+UNNAMED_WINDOW = "unnamed window"
+
+
 def format_for_model(
     elements: list[UiElement],
     max_items: int = 400,
     max_name: int = 60,
     screen: tuple[int, int, int, int] | None = None,
+    group_by_window: bool = False,
 ) -> tuple[str, int]:
-    """One line per NAMED element, e.g. '17: Button "Volume" (taskbar, bottom-right)'.
+    """One line per NAMED element, e.g. '17: Button "Volume" (bottom-right)'.
+
+    A line never repeats its window's name: on a 60-line list that name would be sent
+    60 times. A caller whose elements all share one window names it once itself; for
+    elements of several windows pass `group_by_window`, which puts each window's
+    elements under one '[window name]' header line. Windows keep the order of their
+    first element and elements keep their order inside a window.
 
     Unnamed elements are left out (the model cannot match them by text). `screen` is
     (left, top, right, bottom) for the position hints; by default the area all elements
-    span. Returns the text and how many elements it lists (at most `max_items`).
+    span. Returns the text and how many elements it lists (at most `max_items`; header
+    lines do not count).
     """
     area = screen or screen_extent(elements)
+    shown = [el for el in elements if el.name][:max_items]
+
+    def line(el: UiElement) -> str:
+        suffix = f" ({position_label(el, area)})" if area is not None else ""
+        return f'{el.id}: {el.type} "{_short(el.name, max_name)}"{suffix}'
+
+    if not group_by_window:
+        return "\n".join(line(el) for el in shown), len(shown)
+
+    groups: dict[str, list[str]] = {}  # window name -> its lines, in first-seen order
+    for el in shown:
+        groups.setdefault(el.app, []).append(line(el))
     lines: list[str] = []
-    for el in elements:
-        if not el.name:
-            continue
-        if len(lines) >= max_items:
-            break
-        where = [_short(el.app, 40)] if el.app else []
-        if area is not None:
-            where.append(position_label(el, area))
-        suffix = f" ({', '.join(where)})" if where else ""
-        lines.append(f'{el.id}: {el.type} "{_short(el.name, max_name)}"{suffix}')
-    return "\n".join(lines), len(lines)
+    for app, members in groups.items():
+        lines.append(f"[{_short(app, 40) or UNNAMED_WINDOW}]")
+        lines.extend(members)
+    return "\n".join(lines), len(shown)
 
 
 def match_element(old: UiElement, fresh: list[UiElement], tolerance: int = 20) -> UiElement | None:
