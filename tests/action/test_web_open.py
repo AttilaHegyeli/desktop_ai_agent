@@ -36,6 +36,12 @@ class TestOpenHelper(unittest.TestCase):
 
 
 class TestWebOpenHandler(unittest.TestCase):
+    def setUp(self):
+        # No real window is enumerated or focused (window_wait has its own tests).
+        patcher = mock.patch.object(handlers, "_with_page_window", lambda open_page: open_page())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_handler_uses_helper(self):
         with mock.patch.object(
             handlers, "_open_url", return_value={"opened": "https://youtube.com"}

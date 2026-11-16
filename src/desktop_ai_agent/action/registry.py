@@ -270,7 +270,9 @@ def build_default_registry() -> ActionRegistry:
                 name="open_app",
                 description=(
                     "Open an installed Windows application by name, for example 'steam' or "
-                    "'vs code'. Only programs found in the executable index can be opened."
+                    "'vs code'. Only programs found in the executable index can be opened. "
+                    "If it is already running, its window is brought to the front instead. "
+                    "Waits up to 10 s for the window to appear."
                 ),
                 risk=Risk.MEDIUM,
                 params=(
@@ -304,7 +306,7 @@ def build_default_registry() -> ActionRegistry:
                     "Open an http or https URL in the user's default browser. Use when the "
                     "user wants to go to a site, open GitHub/YouTube/a link, or play something "
                     "via a web page. Build a sensible https URL. For answering questions with "
-                    "facts, prefer web_search instead."
+                    "facts, prefer web_search instead. Waits up to 10 s for the page's window."
                 ),
                 risk=Risk.MEDIUM,
                 params=(

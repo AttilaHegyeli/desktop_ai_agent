@@ -197,6 +197,8 @@ def bring_to_front(hwnd: int) -> bool:  # pragma: no cover - needs Windows
     u = _win()[2]
     if u.IsIconic(hwnd):
         u.ShowWindow(hwnd, SW_RESTORE)
+    elif u.GetForegroundWindow() == hwnd:
+        return True  # already in front (e.g. an app that just opened): touch nothing
     if u.SetForegroundWindow(hwnd) and u.GetForegroundWindow() == hwnd:
         return True
     u.keybd_event(_VK_MENU, 0, 0, 0)

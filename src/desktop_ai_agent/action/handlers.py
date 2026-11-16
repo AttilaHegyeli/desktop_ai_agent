@@ -16,6 +16,7 @@ from typing import Any
 
 from desktop_ai_agent.action.tools import ui_control as _ui_control
 from desktop_ai_agent.action.tools import window_control as _window_control
+from desktop_ai_agent.action.tools import window_wait as _window_wait
 from desktop_ai_agent.action.tools.screenshot import capture_screen
 from desktop_ai_agent.action.tools.web_open import open_url as _open_url
 from desktop_ai_agent.action.tools.web_search import search_web as _search_web
@@ -49,8 +50,13 @@ def web_search(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def web_open(args: dict[str, Any]) -> dict[str, Any]:
-    """Open an http(s) URL in the user's default browser."""
-    return _open_url(args["url"])
+    """Open an http(s) URL in the user's default browser and wait for its window."""
+    return _with_page_window(lambda: _open_url(args["url"]))
+
+
+def _with_page_window(open_page: Any) -> dict[str, Any]:
+    # Seam: tests replace it, so no real window is ever enumerated or focused.
+    return _window_wait.open_page_window(open_page)
 
 
 def list_elements(args: dict[str, Any]) -> dict[str, Any]:
@@ -138,7 +144,7 @@ def _name_matches(hit: dict[str, str], wanted: str, wanted_c: str) -> bool:
     return False
 
 
-def open_app(args: dict[str, Any]) -> dict[str, str]:
+def open_app(args: dict[str, Any]) -> dict[str, Any]:
     """Launch an indexed program by name. The path/AUMID always comes from the index."""
     query = args["name"].strip()
     if not query:
@@ -172,12 +178,24 @@ def open_app(args: dict[str, Any]) -> dict[str, str]:
 
     aumid = chosen.get("aumid") or ""
     if aumid:
-        _launch_aumid(aumid)
-        return {"opened": chosen["name"], "path": "", "aumid": aumid}
+        def launch() -> dict[str, Any]:
+            _launch_aumid(aumid)
+            return {"opened": chosen["name"], "path": "", "aumid": aumid}
+
+        return _with_app_window(chosen["name"], "", launch)  # Store app: no own .exe to match
 
     path = chosen["path"]
-    _start_file(path)
-    return {"opened": chosen["name"], "path": path}
+
+    def launch() -> dict[str, Any]:
+        _start_file(path)
+        return {"opened": chosen["name"], "path": path}
+
+    return _with_app_window(chosen["name"], Path(path).stem, launch)
+
+
+def _with_app_window(name: str, exe_stem: str, launch: Any) -> dict[str, Any]:
+    # Seam: tests replace it, so no real window is ever enumerated or focused.
+    return _window_wait.open_app_window(name, exe_stem, launch)
 
 
 # action name -> handler. Must match the registry exactly (the executor checks).
