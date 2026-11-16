@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from desktop_ai_agent.action.tools import mouse_safety, mouse_win32
+from desktop_ai_agent.input.element_ranking import rank_by_request
 from desktop_ai_agent.input.ui_elements import (
     UiElement,
     format_for_model,
@@ -113,8 +114,12 @@ def _on_a_monitor(x: int, y: int, monitors: list[Any]) -> bool:
     return any(m.left <= x < m.right and m.top <= y < m.bottom for m in monitors)
 
 
-def list_elements(area: str = "active") -> dict[str, Any]:
-    """Scan once, keep ``area``, remember the list and return it as numbered text."""
+def list_elements(area: str = "active", request: str = "") -> dict[str, Any]:
+    """Scan once, keep ``area``, remember the list and return it as numbered text.
+
+    Elements matching ``request`` (the user's words) are moved first BEFORE the list is
+    cut to ``MAX_LISTED``, so the one the user means is not cut off in a busy window.
+    """
     global _last, _cleared_by
     if area not in AREAS:
         raise ValueError(f"area must be one of {list(AREAS)}, got '{area}'")
@@ -122,7 +127,7 @@ def list_elements(area: str = "active") -> dict[str, Any]:
     elements = _scan(_bounds(monitors))
     picked = filter_area(elements, area, _foreground() if area == "active" else None)
     named = [e for e in picked if e.name]  # the model matches by name, so unnamed ones are useless
-    shown = named[:MAX_LISTED]
+    shown = rank_by_request(named, request, lambda e: e.name)[:MAX_LISTED]
     # Only "all" spans several windows. The other areas hold one window, named once by
     # the `window` field (active) or by the area itself (taskbar, desktop).
     text, listed = format_for_model(shown, screen=_bounds(monitors), group_by_window=area == "all")

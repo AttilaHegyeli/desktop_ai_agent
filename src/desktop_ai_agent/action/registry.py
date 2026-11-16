@@ -43,10 +43,15 @@ class Param:
     maximum: float | None = None
     max_length: int | None = None
     enum: tuple[str, ...] | None = None
+    # Injected: filled by the orchestrator from what it knows (e.g. the user's request),
+    # never by the model. Left out of the model's tool list, still validated and logged.
+    injected: bool = False
 
     def __post_init__(self) -> None:
         if self.type not in _PY_TYPES:
             raise ValueError(f"Param '{self.name}': unsupported type '{self.type}'")
+        if self.injected and self.required:
+            raise ValueError(f"Param '{self.name}': an injected parameter must be optional")
 
     def check(self, value: Any) -> Any:
         # bool is a subclass of int in Python; never accept True/False as a number.
@@ -117,8 +122,24 @@ class ActionSpec:
                 raise ValidationError(f"{self.name}: missing required parameter '{p.name}'")
         return clean
 
+    def inject(self, args: Any, values: Mapping[str, Any]) -> Any:
+        """`args` with every injected parameter set from `values`.
+
+        A value the model wrote for an injected parameter is always dropped: only our
+        code may fill these. Non-object `args` are returned unchanged, so validation
+        still rejects them with its usual message.
+        """
+        if args is not None and not isinstance(args, Mapping):
+            return args
+        injected = {p.name for p in self.params if p.injected}
+        out = {k: v for k, v in (args or {}).items() if k not in injected}
+        out.update({name: values[name] for name in injected if name in values})
+        return out
+
     def to_tool(self) -> dict[str, Any]:
-        """Tool definition in the OpenAI/Ollama function-calling format."""
+        """Tool definition in the OpenAI/Ollama function-calling format. Injected
+        parameters are left out: the model neither sees nor sets them."""
+        visible = [p for p in self.params if not p.injected]
         return {
             "type": "function",
             "function": {
@@ -126,8 +147,8 @@ class ActionSpec:
                 "description": self.description,
                 "parameters": {
                     "type": "object",
-                    "properties": {p.name: p.json_schema() for p in self.params},
-                    "required": [p.name for p in self.params if p.required],
+                    "properties": {p.name: p.json_schema() for p in visible},
+                    "required": [p.name for p in visible if p.required],
                     "additionalProperties": False,
                 },
             },
@@ -161,6 +182,23 @@ class ActionRegistry:
     def to_tools(self) -> list[dict[str, Any]]:
         """The exact list handed to the model, so what it sees == what we enforce."""
         return [self._specs[n].to_tool() for n in self.names()]
+
+    def inject(self, plan: Any, values: Mapping[str, Any]) -> Any:
+        """A copy of `plan` with injected parameters filled from `values`.
+
+        Steps that are malformed or name an unknown action are left as they are, so
+        the executor rejects them with its usual message.
+        """
+        if not isinstance(plan, (list, tuple)):
+            return plan
+        out: list[Any] = []
+        for step in plan:
+            name = step.get("name") if isinstance(step, Mapping) else None
+            if not isinstance(name, str) or name not in self._specs:
+                out.append(step)
+                continue
+            out.append({**step, "arguments": self._specs[name].inject(step.get("arguments"), values)})
+        return out
 
 
 def build_default_registry() -> ActionRegistry:
@@ -278,6 +316,7 @@ def build_default_registry() -> ActionRegistry:
                 description=(
                     "List the clickable elements visible on screen (buttons, icons, menu items, "
                     "tabs, links, text boxes) as numbered lines with name and rough position. "
+                    "Elements whose names match the user's request come first. "
                     "area: active = the window in front (default), taskbar, desktop "
                     "(desktop icons), all (grouped under [window] headers). "
                     "Call this before move_mouse."
@@ -290,6 +329,15 @@ def build_default_registry() -> ActionRegistry:
                         "Which part of the screen to list (default active)",
                         required=False,
                         enum=("active", "taskbar", "desktop", "all"),
+                    ),
+                    # No max_length: it is our own copy of the user's text, and a long
+                    # request must never make the list fail.
+                    Param(
+                        "request",
+                        "string",
+                        "The user's request, used to put matching elements first",
+                        required=False,
+                        injected=True,
                     ),
                 ),
             ),

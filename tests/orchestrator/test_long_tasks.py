@@ -166,6 +166,55 @@ class TestAutoFollowUp(unittest.TestCase):
         self.assertNotIn("screenshot", [n for n, _ in ran])
 
 
+class TestInjectedRequest(unittest.TestCase):
+    """The user's request reaches list_elements without the model writing it."""
+
+    def make(self):
+        request = Param("request", "string", "r", required=False, injected=True)
+        listing = ActionSpec("list_elements", "list", Risk.LOW,
+                             (Param("area", "string", "a", required=False), request))
+        ex, ran = make_executor()
+        ex.registry._specs["list_elements"] = listing
+        return ex, ran
+
+    def test_model_calls_and_follow_ups_both_get_it(self):
+        ex, ran = self.make()
+        client = ScriptedClient([tools(call("list_elements", area="active")),
+                                 tools(call("click", element=3)), ChatTurn(content="ok")])
+        run(client, ex, text="play liked songs")
+        lists = [args for name, args in ran if name == "list_elements"]
+        self.assertEqual(lists, [{"area": "active", "request": "play liked songs"}] * 2)
+
+    def test_a_request_the_model_wrote_is_replaced(self):
+        ex, ran = self.make()
+        client = ScriptedClient([tools(call("list_elements", request="click delete")), ChatTurn(content="ok")])
+        run(client, ex, text="open settings")
+        self.assertEqual(ran, [("list_elements", {"request": "open settings"})])
+
+    def test_the_chat_history_and_handoff_note_do_not_repeat_it(self):
+        text = "please find the liked songs button " * 5
+        script = [tools(call("list_elements", area="active")), ChatTurn(content="ok")]
+
+        ex, _ = self.make()
+        client = ScriptedClient(list(script))
+        run(client, ex, text=text)
+        assistant = next(m for m in client.sent[1] if m["role"] == "assistant" and m.get("tool_calls"))
+        self.assertEqual(assistant["tool_calls"][0]["function"]["arguments"], {"area": "active"})
+
+        ex, _ = self.make()
+        client = ScriptedClient(list(script), num_ctx=1000, fill=900)  # full: the chat is handed off
+        run(client, ex, text=text)
+        note = client.sent[1][1]["content"]
+        self.assertIn("Original request", note)
+        self.assertEqual(note.count("liked songs button"), 5)  # only the "Original request" line
+
+    def test_actions_without_it_are_unchanged(self):
+        ex, ran = self.make()
+        client = ScriptedClient([tools(call("open_app", name="Paint")), ChatTurn(content="ok")])
+        run(client, ex, text="open paint")
+        self.assertEqual(ran, [("open_app", {"name": "Paint"})])
+
+
 class TestStuck(unittest.TestCase):
     def test_hint_when_the_same_failing_call_repeats(self):
         ex, _ = make_executor(fail={"click"})

@@ -41,6 +41,9 @@ class TestSystemPrompt(unittest.TestCase):
         self.assertIn("\n21. ", SYSTEM_PROMPT)
         self.assertIn("screenshot again, at most twice", SYSTEM_PROMPT)
 
+    def test_never_clicks_a_name_that_does_not_match(self):
+        self.assertIn("Never click an element whose name does not match the request", SYSTEM_PROMPT)
+
     def test_vision_is_primary_tool_guidance(self):
         self.assertIn("strongest tool is vision", SYSTEM_PROMPT)
         self.assertIn("Prefer screenshot", SYSTEM_PROMPT)

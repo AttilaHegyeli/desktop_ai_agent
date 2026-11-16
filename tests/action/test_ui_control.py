@@ -121,6 +121,28 @@ class TestListElements(Case):
         self.assertEqual(result["count"], ui_control.MAX_LISTED)
         self.assertIn("narrower area", result["note"])
 
+    def test_a_match_far_down_is_moved_before_the_cut(self):
+        self.screen = [UiElement(i, f"Track {i}", "ListItem", "Spotify", 0, i, 10, i + 10, EDGE)
+                       for i in range(1, 140)]
+        self.screen.insert(99, UiElement(500, "Liked Songs", "ListItem", "Spotify", 0, 99, 10, 109, EDGE))
+        self.assertNotIn("Liked Songs", ui_control.list_elements("active")["elements"])  # cut off without it
+        result = ui_control.list_elements("active", request="play my liked songs")
+        self.assertEqual(result["elements"].splitlines()[0], '500: ListItem "Liked Songs" (top-left)')
+        self.assertEqual(result["count"], ui_control.MAX_LISTED)
+        ui_control.move_mouse(500)  # its number works
+        self.assertEqual(len(self.cursor), 1)
+
+    def test_no_match_keeps_screen_order(self):
+        self.assertEqual(ui_control.list_elements("taskbar", request="the heart playlist")["elements"],
+                         ui_control.list_elements("taskbar")["elements"])
+
+    def test_through_the_executor_with_the_injected_request(self):
+        ex = executor_mod.default_executor()
+        plan = ex.registry.inject([{"name": "list_elements", "arguments": {"area": "taskbar"}}],
+                                  {"request": "volume headphones"})
+        (r,) = ex.run(plan)
+        self.assertEqual(r.output["elements"].splitlines()[0], '2: Button "Headphones: 43%" (bottom-right)')
+
     def test_unknown_area(self):
         with self.assertRaisesRegex(ValueError, "area must be one of"):
             ui_control.list_elements("moon")

@@ -317,6 +317,15 @@ def follow_up_plan(plan: list[dict[str, Any]], registry: Any) -> list[dict[str, 
     ]
 
 
+def _execute(executor: Executor, state: TaskState, plan: list[dict[str, Any]]) -> list[StepResult]:
+    """Run `plan` with the injected parameters filled in (e.g. list_elements' request).
+
+    The caller keeps the model's own plan for the chat history and the handoff note, so
+    the request text is not repeated there; the executor still validates and logs it.
+    """
+    return executor.run(executor.registry.inject(plan, {"request": state.user_text}))
+
+
 def _clip(value: Any, limit: int = 80) -> str:
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
     return text if len(text) <= limit else text[: limit - 3] + "..."
@@ -471,7 +480,7 @@ def _run_follow_ups(
     # Recorded as tool calls of the model's last turn, so each result answers a call.
     add_calls([{"function": {"name": s["name"], "arguments": s["arguments"]}} for s in steps])
     emit("follow_up", steps)
-    results = executor.run(steps)
+    results = _execute(executor, state, steps)
     _report_results(client, state, steps, results, emit)
     return any(r.ok and r.name == "list_elements" for r in results)
 
@@ -585,7 +594,7 @@ def _run_round(
     if stop_requested():
         _skip_plan(client, plan)
         return _stopped(client, state.round_no)
-    results: list[StepResult] = executor.run(plan)
+    results = _execute(executor, state, plan)
     _report_results(client, state, plan, results, emit)
 
     had_screenshot = any(r.ok and r.name == "screenshot" for r in results)

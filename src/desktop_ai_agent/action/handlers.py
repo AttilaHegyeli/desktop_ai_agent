@@ -53,8 +53,8 @@ def web_open(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def list_elements(args: dict[str, Any]) -> dict[str, Any]:
-    """Numbered list of visible clickable elements (UI Automation)."""
-    return _ui_control.list_elements(args.get("area", "active"))
+    """Numbered list of visible clickable elements (UI Automation), matches to the request first."""
+    return _ui_control.list_elements(args.get("area", "active"), args.get("request", ""))
 
 
 def move_mouse(args: dict[str, Any]) -> dict[str, Any]:

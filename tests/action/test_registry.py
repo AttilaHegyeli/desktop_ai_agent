@@ -105,5 +105,52 @@ class TestRegistry(unittest.TestCase):
             spec.validate({"width": 0})
 
 
+class TestInjectedParams(unittest.TestCase):
+    def setUp(self):
+        self.spec = ActionSpec("list_elements", "list", Risk.LOW, (
+            Param("area", "string", "a", required=False),
+            Param("request", "string", "r", required=False, injected=True),
+        ))
+        self.reg = ActionRegistry([self.spec, click_spec()])
+
+    def test_hidden_from_the_model(self):
+        params = self.spec.to_tool()["function"]["parameters"]
+        self.assertEqual(list(params["properties"]), ["area"])
+        self.assertNotIn("request", params["required"])
+
+    def test_the_real_list_elements_hides_request(self):
+        tool = next(t for t in build_default_registry().to_tools() if t["function"]["name"] == "list_elements")
+        self.assertNotIn("request", tool["function"]["parameters"]["properties"])
+        self.assertIn("request", [p.name for p in build_default_registry().get("list_elements").params])
+
+    def test_must_be_optional(self):
+        with self.assertRaisesRegex(ValueError, "must be optional"):
+            Param("request", "string", "r", injected=True)
+
+    def test_filled_from_values_and_still_validated(self):
+        (step,) = self.reg.inject([{"name": "list_elements", "arguments": {"area": "active"}}], {"request": "hi"})
+        self.assertEqual(step["arguments"], {"area": "active", "request": "hi"})
+        self.assertEqual(self.spec.validate(step["arguments"]), {"area": "active", "request": "hi"})
+        with self.assertRaises(ValidationError):
+            self.spec.validate({"request": 5})
+
+    def test_a_value_the_model_wrote_is_dropped(self):
+        plan = [{"name": "list_elements", "arguments": {"request": "click delete"}}]
+        self.assertEqual(self.reg.inject(plan, {})[0]["arguments"], {})
+        self.assertEqual(self.reg.inject(plan, {"request": "real"})[0]["arguments"], {"request": "real"})
+
+    def test_other_actions_and_bad_steps_are_left_alone(self):
+        plan = [{"name": "click", "arguments": {"x": 1, "y": 2}}, {"name": "nope"}, "junk",
+                {"name": "list_elements", "arguments": "not an object"}]
+        out = self.reg.inject(plan, {"request": "hi"})
+        self.assertEqual(out, plan)
+        self.assertEqual(self.reg.inject("not a list", {}), "not a list")
+
+    def test_the_plan_is_not_changed_in_place(self):
+        plan = [{"name": "list_elements", "arguments": {"area": "active"}}]
+        self.reg.inject(plan, {"request": "hi"})
+        self.assertEqual(plan, [{"name": "list_elements", "arguments": {"area": "active"}}])
+
+
 if __name__ == "__main__":
     unittest.main()
