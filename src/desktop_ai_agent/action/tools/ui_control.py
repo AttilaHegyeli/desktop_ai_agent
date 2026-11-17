@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from desktop_ai_agent.action.tools import mouse_safety, mouse_win32
+from desktop_ai_agent.input.element_ranking import rank_by_request
 from desktop_ai_agent.input.ui_elements import (
     UiElement,
     format_for_model,
@@ -93,6 +94,16 @@ def filter_area(
     return [e for e in elements if e.hwnd == hwnd]
 
 
+def by_window_order(elements: list[UiElement], z_order: list[int]) -> list[UiElement]:
+    """Front window's elements first; screen order kept inside a window.
+
+    `z_order` is window handles, front first. Elements of a window not in it (unknown
+    handle) go last, so a failed lookup never hides anything, it only stops sorting.
+    """
+    rank = {hwnd: i for i, hwnd in enumerate(z_order)}
+    return sorted(elements, key=lambda e: rank.get(e.hwnd, len(rank)))
+
+
 def risky_word(name: str) -> str | None:
     match = _RISKY.search(name or "")
     return match.group(0) if match else None
@@ -113,30 +124,41 @@ def _on_a_monitor(x: int, y: int, monitors: list[Any]) -> bool:
     return any(m.left <= x < m.right and m.top <= y < m.bottom for m in monitors)
 
 
-def list_elements(area: str = "active") -> dict[str, Any]:
-    """Scan once, keep ``area``, remember the list and return it as numbered text."""
+def list_elements(area: str = "active", request: str = "") -> dict[str, Any]:
+    """Scan once, keep ``area``, remember the list and return it as numbered text.
+
+    Elements matching ``request`` (the user's words) are moved first BEFORE the list is
+    cut to ``MAX_LISTED``, so the one the user means is not cut off in a busy window.
+    """
     global _last, _cleared_by
     if area not in AREAS:
         raise ValueError(f"area must be one of {list(AREAS)}, got '{area}'")
     monitors = _monitors()
     elements = _scan(_bounds(monitors))
     picked = filter_area(elements, area, _foreground() if area == "active" else None)
-    text, listed = format_for_model(picked, max_items=MAX_LISTED, screen=_bounds(monitors))
-
-    shown = [e for e in picked if e.name][:listed]
+    named = [e for e in picked if e.name]  # the model matches by name, so unnamed ones are useless
+    if area == "all":
+        named = by_window_order(named, _z_order())
+    # Stable sort: the request decides first; window order and screen order break ties.
+    shown = rank_by_request(named, request, lambda e: e.name)[:MAX_LISTED]
+    # Only "all" spans several windows. The other areas hold one window, named once by
+    # the `window` field (active) or by the area itself (taskbar, desktop).
+    text, listed = format_for_model(shown, screen=_bounds(monitors), group_by_window=area == "all")
     _last, _cleared_by = _LastList({e.id: e for e in shown}, _now()), None
 
-    result: dict[str, Any] = {"area": area, "count": listed, "elements": text}
+    result: dict[str, Any] = {"area": area}
     if area == "active":
-        result["window"] = next((e.app for e in picked if e.app), None)
+        result["window"] = next((e.app for e in picked if e.app), None)  # read before the list
+    result["count"] = listed
+    result["elements"] = text
     if not listed:
         result["note"] = (
             f"No named clickable elements in area '{area}'. Try another area "
             "(taskbar, desktop, all) or take a screenshot."
         )
-    elif listed < (named := sum(1 for e in picked if e.name)):
+    elif listed < len(named):
         result["note"] = (
-            f"Showing {listed} of {named} elements. If the one you need "
+            f"Showing {listed} of {len(named)} elements. If the one you need "
             "is missing, use a narrower area (taskbar, desktop) or take a screenshot."
         )
     return result
@@ -279,6 +301,15 @@ def _scan(bounds: tuple[int, int, int, int] | None) -> list[UiElement]:  # pragm
     from desktop_ai_agent.input.ui_elements import list_ui_elements
 
     return list_ui_elements(bounds=bounds)
+
+
+def _z_order() -> list[int]:  # pragma: no cover - needs Windows
+    from desktop_ai_agent.input.windows import z_order
+
+    try:
+        return z_order()
+    except OSError:
+        return []  # no order known: the list keeps screen order
 
 
 def _foreground() -> tuple[int, str] | None:  # pragma: no cover

@@ -20,6 +20,12 @@ class TempExeCase(unittest.TestCase):
         patcher = mock.patch.object(handlers, "_start_file", self.launched.append)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # No real window is enumerated or focused: just launch (window_wait has its own tests).
+        self.waited = []
+        patcher = mock.patch.object(handlers, "_with_app_window",
+                                    lambda name, stem, launch: self.waited.append((name, stem)) or launch())
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def exe(self, name):
         path = self.dir / name
@@ -39,6 +45,7 @@ class TestMatching(TempExeCase):
         result = handlers.open_app({"name": "steam"})
         self.assertEqual(self.launched, [steam])
         self.assertEqual(result, {"opened": "steam", "path": steam})
+        self.assertEqual(self.waited, [("steam", "steam")])  # waits for the window of steam.exe
 
     def test_query_is_normalised_like_the_index_does(self):
         code = self.exe("code.exe")

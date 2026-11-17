@@ -14,7 +14,7 @@ from desktop_ai_agent.orchestrator.prompts import (
 _NAMED_IN_PROMPT = frozenset(
     {
         "provide_script", "web_search", "web_open", "screenshot", "list_elements", "move_mouse",
-        "click", "type_text", "wait",
+        "click", "type_text", "wait", "window_control",
     }
 )
 
@@ -40,6 +40,14 @@ class TestSystemPrompt(unittest.TestCase):
     def test_retakes_a_screenshot_while_an_app_is_loading(self):
         self.assertIn("\n21. ", SYSTEM_PROMPT)
         self.assertIn("screenshot again, at most twice", SYSTEM_PROMPT)
+
+    def test_never_clicks_a_name_that_does_not_match(self):
+        self.assertIn("Never click an element whose name does not match the request", SYSTEM_PROMPT)
+
+    def test_window_tasks_use_window_control_and_never_choose_for_the_user(self):
+        self.assertIn("\n22. For window tasks", SYSTEM_PROMPT)
+        self.assertIn("never choose for them", SYSTEM_PROMPT)
+        self.assertNotIn("click its taskbar button", SYSTEM_PROMPT)
 
     def test_vision_is_primary_tool_guidance(self):
         self.assertIn("strongest tool is vision", SYSTEM_PROMPT)

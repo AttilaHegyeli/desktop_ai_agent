@@ -122,13 +122,53 @@ class TestFormatAndChoice(unittest.TestCase):
         text, count = format_for_model(self.els, screen=self.screen)
         lines = text.splitlines()
         self.assertEqual(count, 2)
-        self.assertEqual(lines[0], '1: Button "Volume" (taskbar, bottom-right)')
+        self.assertEqual(lines[0], '1: Button "Volume" (bottom-right)')
         self.assertTrue(lines[1].startswith('3: ListItem "xxx'))
-        self.assertIn('..." (desktop, top-left)', lines[1])  # long names are shortened
+        self.assertIn('..." (top-left)', lines[1])  # long names are shortened
 
     def test_position_defaults_to_the_area_the_elements_span(self):
         text, _ = format_for_model(self.els)
-        self.assertIn("(taskbar, bottom-right)", text)
+        self.assertIn('"Volume" (bottom-right)', text)
+
+    def test_a_line_never_repeats_its_window_name(self):
+        for grouped in (False, True):
+            with self.subTest(grouped=grouped):
+                text, _ = format_for_model(self.els, screen=self.screen, group_by_window=grouped)
+                element_lines = [ln for ln in text.splitlines() if not ln.startswith("[")]
+                self.assertEqual(len(element_lines), 2)
+                self.assertFalse(any("taskbar" in ln or "desktop" in ln for ln in element_lines))
+
+    def test_groups_name_each_window_once_in_a_header(self):
+        els = [
+            UiElement(1, "Play", "Button", "Spotify Free", 900, 1000, 940, 1030),
+            UiElement(2, "Start", "Button", "taskbar", 0, 1040, 48, 1080),
+            UiElement(3, "Search", "Edit", "Spotify Free", 300, 10, 700, 40),  # same window, later
+        ]
+        text, count = format_for_model(els, screen=self.screen, group_by_window=True)
+        self.assertEqual(text.splitlines(), [
+            "[Spotify Free]",
+            '1: Button "Play" (bottom-center)',
+            '3: Edit "Search" (top-left)',
+            "[taskbar]",
+            '2: Button "Start" (bottom-left)',
+        ])
+        self.assertEqual(count, 3)  # header lines are not counted
+
+    def test_groups_are_cut_by_element_count_not_by_lines(self):
+        els = [UiElement(i, f"Item {i}", "Button", f"Window {i}", 0, 0, 40, 40) for i in (1, 2, 3)]
+        text, count = format_for_model(els, max_items=2, group_by_window=True)
+        self.assertEqual(count, 2)
+        self.assertEqual([ln for ln in text.splitlines() if ln.startswith("[")], ["[Window 1]", "[Window 2]"])
+
+    def test_group_headers_shorten_long_names_and_label_untitled_windows(self):
+        els = [UiElement(1, "OK", "Button", "", 0, 0, 40, 40),
+               UiElement(2, "Cancel", "Button", "w" * 100, 50, 0, 90, 40)]
+        headers = [ln for ln in format_for_model(els, group_by_window=True)[0].splitlines() if ln.startswith("[")]
+        self.assertEqual(headers, ["[unnamed window]", "[" + "w" * 37 + "...]"])
+
+    def test_no_elements_gives_empty_text(self):
+        for grouped in (False, True):
+            self.assertEqual(format_for_model([], group_by_window=grouped), ("", 0))
 
     def test_position_label_grid(self):
         def at(x, y):

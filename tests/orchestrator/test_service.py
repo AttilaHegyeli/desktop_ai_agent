@@ -86,17 +86,25 @@ class TestService(unittest.TestCase):
         self.assertTrue(client.cleared)
 
     def test_reset_also_clears_ui_control_memory(self):
-        from desktop_ai_agent.action.tools import ui_control
+        from desktop_ai_agent.action.tools import mouse_safety, ui_control
 
+        # The click history and emergency lock live in mouse_safety (shared with pointer_control).
         ui_control._last = object()  # type: ignore[assignment]
         ui_control._cleared_by = "click"
-        ui_control._click_times.append(1.0)
-        ui_control._locked_until = 999.0
+        mouse_safety._click_times.append(1.0)
+        mouse_safety._locked_until = 999.0
         AgentService(FakeClient(), executor()).reset()
         self.assertIsNone(ui_control._last)
         self.assertIsNone(ui_control._cleared_by)
-        self.assertEqual(ui_control._click_times, [])
-        self.assertEqual(ui_control._locked_until, 0.0)
+        self.assertEqual(mouse_safety._click_times, [])
+        self.assertEqual(mouse_safety._locked_until, 0.0)
+
+    def test_reset_also_forgets_the_window_list(self):
+        from desktop_ai_agent.action.tools import window_control
+
+        window_control._last = object()  # type: ignore[assignment]
+        AgentService(FakeClient(), executor()).reset()
+        self.assertIsNone(window_control._last)
 
     def test_create_builds_default_stack(self):
         service = AgentService.create(audit_path=None)

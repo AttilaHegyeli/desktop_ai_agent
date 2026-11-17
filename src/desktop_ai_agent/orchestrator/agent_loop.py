@@ -169,7 +169,7 @@ def leaked_tool_calls(text: str, registry: Any) -> list[dict[str, Any]]:
 
 
 # Actions that can change what is on screen; mid-task vision refresh only after these.
-_UI_CHANGING = frozenset({"wait", "open_app", "web_open", "click"})
+_UI_CHANGING = frozenset({"wait", "open_app", "web_open", "click", "window_control"})
 
 # Large tool results that go stale: only the newest copy stays in the chat history.
 _SUPERSEDED = {
@@ -191,7 +191,7 @@ _FOLLOW_UPS: dict[str, tuple[dict[str, Any], ...]] = {
 }
 
 # Actions after which an earlier element list no longer matches the screen.
-_STALES_ELEMENTS = frozenset({"open_app", "web_open", "click", "type_text"})
+_STALES_ELEMENTS = frozenset({"open_app", "web_open", "click", "type_text", "window_control"})
 
 # When the chat fills this share of the context window, restart it with a handoff note.
 HANDOFF_AT = 0.85
@@ -315,6 +315,15 @@ def follow_up_plan(plan: list[dict[str, Any]], registry: Any) -> list[dict[str, 
         for s in _FOLLOW_UPS[names[last]]
         if s["name"] in registry
     ]
+
+
+def _execute(executor: Executor, state: TaskState, plan: list[dict[str, Any]]) -> list[StepResult]:
+    """Run `plan` with the injected parameters filled in (e.g. list_elements' request).
+
+    The caller keeps the model's own plan for the chat history and the handoff note, so
+    the request text is not repeated there; the executor still validates and logs it.
+    """
+    return executor.run(executor.registry.inject(plan, {"request": state.user_text}))
 
 
 def _clip(value: Any, limit: int = 80) -> str:
@@ -471,7 +480,7 @@ def _run_follow_ups(
     # Recorded as tool calls of the model's last turn, so each result answers a call.
     add_calls([{"function": {"name": s["name"], "arguments": s["arguments"]}} for s in steps])
     emit("follow_up", steps)
-    results = executor.run(steps)
+    results = _execute(executor, state, steps)
     _report_results(client, state, steps, results, emit)
     return any(r.ok and r.name == "list_elements" for r in results)
 
@@ -585,7 +594,7 @@ def _run_round(
     if stop_requested():
         _skip_plan(client, plan)
         return _stopped(client, state.round_no)
-    results: list[StepResult] = executor.run(plan)
+    results = _execute(executor, state, plan)
     _report_results(client, state, plan, results, emit)
 
     had_screenshot = any(r.ok and r.name == "screenshot" for r in results)

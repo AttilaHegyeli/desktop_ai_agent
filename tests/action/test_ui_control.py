@@ -31,6 +31,8 @@ class Case(unittest.TestCase):
         self.now = 1000.0
         self.cursor = []
         self.foreground = (EDGE, "Chrome_WidgetWin_1")
+        self.z = [TASKBAR, EDGE, DESKTOP]  # window stack, front first
+        self.z_calls = 0
         self.scans = 0
         self.pointer = (900, 500)  # where the user's mouse is before we act
         self.clicks = []
@@ -43,6 +45,7 @@ class Case(unittest.TestCase):
         patches = [
             mock.patch.object(ui_control, "_scan", side_effect=scan),
             mock.patch.object(ui_control, "_foreground", side_effect=lambda: self.foreground),
+            mock.patch.object(ui_control, "_z_order", side_effect=self.read_z),
             mock.patch.object(ui_control, "_monitors", side_effect=lambda: [MONITOR]),
             mock.patch.object(ui_control, "_now", side_effect=lambda: self.now),
             mock.patch.object(ui_control, "_set_cursor", side_effect=lambda x, y: self.cursor.append((x, y))),
@@ -57,18 +60,89 @@ class Case(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
+    def read_z(self):
+        self.z_calls += 1
+        return list(self.z)
+
+
+class TestWindowOrder(Case):
+    def headers(self, result):
+        return [ln for ln in result["elements"].splitlines() if ln.startswith("[")]
+
+    def test_all_lists_the_front_window_first(self):
+        self.z = [EDGE, DESKTOP, TASKBAR]
+        result = ui_control.list_elements("all")
+        self.assertEqual(self.headers(result), ["[New tab - Microsoft Edge]", "[desktop]", "[taskbar]"])
+
+    def test_the_request_still_beats_window_order(self):
+        self.z = [EDGE, DESKTOP, TASKBAR]
+        result = ui_control.list_elements("all", request="recycle bin")
+        self.assertEqual(result["elements"].splitlines()[:2], ["[desktop]", '5: ListItem "Recycle Bin" (top-left)'])
+        self.assertEqual(self.headers(result)[1:], ["[New tab - Microsoft Edge]", "[taskbar]"])  # ties: front first
+
+    def test_the_front_window_fills_the_cut_first(self):
+        self.screen = [UiElement(i, f"Icon {i}", "ListItem", "desktop", 0, i, 10, i + 10, DESKTOP) for i in range(1, 80)]
+        self.screen.append(UiElement(500, "New Tab", "Button", "New tab - Microsoft Edge", 300, 0, 340, 30, EDGE))
+        self.z = [EDGE, DESKTOP]
+        self.assertEqual(ui_control.list_elements("all")["elements"].splitlines()[1], '500: Button "New Tab" (top-left)')
+
+    def test_unknown_windows_go_last_and_no_order_keeps_screen_order(self):
+        edge = [e for e in SCREEN if e.hwnd == EDGE]
+        self.assertEqual(ui_control.by_window_order(SCREEN, [EDGE]), edge + [e for e in SCREEN if e.hwnd != EDGE])
+        self.assertEqual(ui_control.by_window_order(SCREEN, []), SCREEN)
+
+    def test_only_area_all_reads_the_window_stack(self):
+        for area in ("active", "taskbar", "desktop"):
+            ui_control.list_elements(area)
+        self.assertEqual(self.z_calls, 0)
+        ui_control.list_elements("all")
+        self.assertEqual(self.z_calls, 1)
+
 
 class TestListElements(Case):
     def test_active_window_only(self):
         result = ui_control.list_elements("active")
         self.assertEqual(result["count"], 1)  # the unnamed Edge button is not listed
-        self.assertEqual(result["elements"], '3: Button "New Tab" (New tab - Microsoft Edge, top-left)')
+        self.assertEqual(result["elements"], '3: Button "New Tab" (top-left)')
 
     def test_desktop_in_front_means_desktop_icons(self):
         self.foreground = (999, "WorkerW")
         result = ui_control.list_elements()
-        self.assertIn('5: ListItem "Recycle Bin" (desktop, top-left)', result["elements"])
-        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["elements"], '5: ListItem "Recycle Bin" (top-left)')
+        self.assertEqual((result["count"], result["window"]), (1, "desktop"))
+
+    def test_the_active_window_is_named_once_and_before_the_list(self):
+        self.screen += [UiElement(i, f"Tab {i}", "TabItem", "New tab - Microsoft Edge", i * 10, 0, i * 10 + 8, 30, EDGE)
+                        for i in range(10, 40)]
+        result = ui_control.list_elements("active")
+        self.assertEqual(result["count"], 31)
+        self.assertEqual(list(result), ["area", "window", "count", "elements"])
+        self.assertEqual(json.dumps(result).count("New tab - Microsoft Edge"), 1)
+
+    def test_taskbar_lines_do_not_repeat_the_area(self):
+        result = ui_control.list_elements("taskbar")
+        self.assertEqual(result["elements"].splitlines(),
+                         ['1: Button "Start" (bottom-left)', '2: Button "Headphones: 43%" (bottom-right)'])
+        self.assertEqual(json.dumps(result).count("taskbar"), 1)  # only the area field
+
+    def test_all_groups_elements_under_one_header_per_window(self):
+        result = ui_control.list_elements("all")
+        self.assertEqual(result["elements"].splitlines(), [
+            "[taskbar]",
+            '1: Button "Start" (bottom-left)',
+            '2: Button "Headphones: 43%" (bottom-right)',
+            "[New tab - Microsoft Edge]",
+            '3: Button "New Tab" (top-left)',
+            "[desktop]",
+            '5: ListItem "Recycle Bin" (top-left)',
+        ])
+        self.assertEqual(result["count"], 4)  # headers are not counted
+        self.assertNotIn("window", result)
+
+    def test_numbers_from_a_grouped_list_still_work(self):
+        ui_control.list_elements("all")
+        ui_control.move_mouse(5)
+        self.assertEqual(self.cursor, [(38, 40)])
 
     def test_taskbar_desktop_and_all(self):
         self.assertEqual(ui_control.list_elements("taskbar")["count"], 2)
@@ -87,6 +161,28 @@ class TestListElements(Case):
         result = ui_control.list_elements("desktop")
         self.assertEqual(result["count"], ui_control.MAX_LISTED)
         self.assertIn("narrower area", result["note"])
+
+    def test_a_match_far_down_is_moved_before_the_cut(self):
+        self.screen = [UiElement(i, f"Track {i}", "ListItem", "Spotify", 0, i, 10, i + 10, EDGE)
+                       for i in range(1, 140)]
+        self.screen.insert(99, UiElement(500, "Liked Songs", "ListItem", "Spotify", 0, 99, 10, 109, EDGE))
+        self.assertNotIn("Liked Songs", ui_control.list_elements("active")["elements"])  # cut off without it
+        result = ui_control.list_elements("active", request="play my liked songs")
+        self.assertEqual(result["elements"].splitlines()[0], '500: ListItem "Liked Songs" (top-left)')
+        self.assertEqual(result["count"], ui_control.MAX_LISTED)
+        ui_control.move_mouse(500)  # its number works
+        self.assertEqual(len(self.cursor), 1)
+
+    def test_no_match_keeps_screen_order(self):
+        self.assertEqual(ui_control.list_elements("taskbar", request="the heart playlist")["elements"],
+                         ui_control.list_elements("taskbar")["elements"])
+
+    def test_through_the_executor_with_the_injected_request(self):
+        ex = executor_mod.default_executor()
+        plan = ex.registry.inject([{"name": "list_elements", "arguments": {"area": "taskbar"}}],
+                                  {"request": "volume headphones"})
+        (r,) = ex.run(plan)
+        self.assertEqual(r.output["elements"].splitlines()[0], '2: Button "Headphones: 43%" (bottom-right)')
 
     def test_unknown_area(self):
         with self.assertRaisesRegex(ValueError, "area must be one of"):
