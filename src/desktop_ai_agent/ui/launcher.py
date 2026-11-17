@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import sys
 import threading
 import tkinter as tk
 from tkinter import scrolledtext, ttk
 from typing import Any
 
 from desktop_ai_agent.core.chat_client import ChatClient
+from desktop_ai_agent.input.hotkey import HoldKey
 from desktop_ai_agent.core.config_loader import (
     load_dotenv,
     load_setup,
@@ -83,6 +85,9 @@ class LauncherApp:
         self._tts_speaking = False
         self._tts_keep_command = False
         self._last_user = ""
+        ptt_cfg = (self.setup.get("voice") or {}).get("push_to_talk") or {}
+        self._ptt_key_enabled = bool(ptt_cfg.get("enabled", True)) and sys.platform == "win32"
+        self._hold_key = HoldKey(hold_ms=int(ptt_cfg.get("hold_ms", 250)))
         self._bar: OverlayBar | None = None
         self._router: CoreRouter | None = None
         self._camera_enabled = camera_enabled(self.setup)
@@ -95,6 +100,8 @@ class LauncherApp:
 
         self._build()
         self._ensure_bar()
+        if self._voice_enabled and self._ptt_key_enabled:
+            self.root.after(50, self._poll_hold_key)
         if ui.get("auto_open", True):
             self.root.after(200, self._on_open)
 
@@ -283,8 +290,8 @@ class LauncherApp:
 
     def _speak(self, text: str, *, keep_command: bool = False) -> None:
         speaker = self._ensure_speaker()
-        if speaker is None:
-            return
+        if speaker is None or self._mic_phase != "idle":
+            return  # user is talking (hold-to-talk): do not talk over them
         self._tts_speaking = True
         self._tts_keep_command = keep_command
         self._pause_wake(keep_command=keep_command)
@@ -525,6 +532,22 @@ class LauncherApp:
             return
         can_start = self._chat_ready and not self._busy and self._agent is not None
         self._ensure_bar().set_mic_phase(self._mic_phase, can_start=can_start)
+        self._refresh_listen_flag()
+
+    def _refresh_listen_flag(self) -> None:
+        if not self._voice_enabled or self._bar is None:
+            return
+        hint = "hold CTRL to talk" if self._ptt_key_enabled else ""
+        if self._mic_phase == "recording":
+            self._bar.set_listen_flag("rec", "LISTENING · release CTRL to send")
+        elif self._mic_phase == "transcribing":
+            self._bar.set_listen_flag("wait", "transcribing…")
+        elif self._wake_enabled and self._wake_muted:
+            self._bar.set_listen_flag("off", f"MIC MUTED · {hint}" if hint else "MIC MUTED")
+        elif self._wake is not None and self._wake.is_running and not self._wake.is_paused:
+            self._bar.set_listen_flag("live", f"MIC LIVE · {hint}" if hint else "MIC LIVE")
+        else:
+            self._bar.set_listen_flag("idle", f"mic paused · {hint}" if hint else "mic paused")
 
     def _ensure_engine(self) -> WhisperEngine:
         if self._engine is None:
@@ -579,16 +602,19 @@ class LauncherApp:
             self._start_wake_if_needed()
             self._append_log("[voice] wake word unmuted")
         self._ensure_bar().set_wake_muted(self._wake_muted)
+        self._refresh_listen_flag()
 
     def _stop_wake(self) -> None:
         wake = self._wake
         self._wake = None
         if wake is not None:
             wake.stop()
+        self._refresh_listen_flag()
 
     def _pause_wake(self, *, keep_command: bool = False) -> None:
         if self._wake is not None and self._wake.is_running:
             self._wake.pause(keep_command=keep_command)
+        self._refresh_listen_flag()
 
     def _resume_wake(self, *, refresh_command: bool = False) -> None:
         if (
@@ -600,6 +626,7 @@ class LauncherApp:
             and not self._tts_speaking
         ):
             self._wake.resume(refresh_command=refresh_command)
+        self._refresh_listen_flag()
 
     def _on_wake_status(self, kind: str, detail: str) -> None:
         if kind == "listening":
@@ -700,7 +727,62 @@ class LauncherApp:
             self._resume_wake()
             self._append_log("[mic] no speech detected")
             return
+        self._send_when_free(text)
+
+    def _send_when_free(self, text: str, tries: int = 40) -> None:
+        """Submit once an interrupted task has wound down (up to ~4 s)."""
+        agent = self._agent
+        if agent is None:
+            return
+        if agent.busy and tries > 0:
+            self.root.after(100, self._send_when_free, text, tries - 1)
+            return
         self._send_agent(text)
+
+    # ---- hold-to-talk key (CTRL) -------------------------------------
+    def _poll_hold_key(self) -> None:
+        try:
+            event = self._hold_key.poll()
+            if event == "press":
+                self._on_hold_press()
+            elif event == "release":
+                self._on_hold_release()
+        except Exception as exc:  # noqa: BLE001 - never kill the poll loop
+            self._append_log(f"[mic] hotkey error: {exc}")
+        self.root.after(30, self._poll_hold_key)
+
+    def _on_hold_press(self) -> None:
+        """CTRL held: cut speech + reply text + running task, then listen."""
+        if self._mic_phase != "idle" or not self._chat_ready or self._agent is None:
+            return
+        if not voice_available():
+            return
+        bar = self._ensure_bar()
+        if self._speaker is not None:
+            self._speaker.interrupt()
+        self._tts_speaking = False
+        self._tts_keep_command = False
+        bar.cut_reply()
+        if self._agent.busy:
+            bar.set_stopping()
+            self._agent.stop()
+        self._pause_wake()
+        try:
+            self._ensure_ptt().start()
+        except VoiceError as exc:
+            self._append_log(f"[mic] {exc}")
+            bar.status_message(str(exc))
+            self._resume_wake()
+            return
+        self._mic_phase = "recording"
+        self.open_btn.configure(state=tk.DISABLED)
+        bar.set_busy(True)
+        self._refresh_mic_button()
+        self._append_log("[mic] listening (CTRL held)... release to send")
+
+    def _on_hold_release(self) -> None:
+        if self._mic_phase == "recording":
+            self._stop_mic_and_submit()
 
     def _on_close(self) -> None:
         self._stop_wake()

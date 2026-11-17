@@ -639,6 +639,17 @@ class OverlayBar:
         if self._wake_available:
             self.mute_btn.pack(side=tk.LEFT, padx=(0, 6))
 
+        # Live mic flag: shows whether the app is listening right now.
+        self._listen_lbl = tk.Label(
+            self._tools,
+            text="",
+            bg=_CARD,
+            fg=_MUTED,
+            font=("Segoe UI Semibold", 8),
+        )
+        if self._voice_enabled:
+            self._listen_lbl.pack(side=tk.LEFT, padx=(2, 0))
+
         self.cfg_btn = RoundButton(
             self._header,
             icon="settings",
@@ -1956,6 +1967,31 @@ class OverlayBar:
                 fg=_ACCENT,
                 active_fill=_ACCENT_SOFT,
             )
+
+    def set_listen_flag(self, kind: str, text: str = "") -> None:
+        """Mic status flag. kind: live | rec | wait | off | idle."""
+        if not self._voice_enabled:
+            return
+        colors = {
+            "live": _SUCCESS,
+            "rec": _DANGER,
+            "wait": _WARN,
+            "off": _DANGER,
+            "idle": _MUTED,
+        }
+        if kind == "rec" and self._mode == "collapsed":
+            self._apply_mode("expanded")  # make sure the flag is visible
+        dot = "● " if kind in ("live", "rec") else ""
+        try:
+            self._listen_lbl.configure(text=f"{dot}{text}", fg=colors.get(kind, _MUTED))
+        except tk.TclError:
+            pass
+
+    def cut_reply(self) -> None:
+        """Stop the typewriter / thinking animation, keeping what is shown."""
+        self._cancel_typewriter()
+        self._cancel_thinking_dots()
+        self._cancel_auto_hide()
 
     def set_mic_phase(self, phase: str, *, can_start: bool) -> None:
         if not self._voice_enabled:
