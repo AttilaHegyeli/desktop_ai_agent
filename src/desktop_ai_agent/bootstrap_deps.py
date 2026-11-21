@@ -26,6 +26,7 @@ RUNTIME_PACKAGES: tuple[str, ...] = (
     "pygame>=2.5",
     "opencv-python-headless>=4.8",
     "mediapipe>=0.10",
+    "segno>=1.6",
 )
 
 LogFn = Callable[[str], None]

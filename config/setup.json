@@ -151,5 +151,17 @@
       "volume": 1.0,
       "wake_ack": "yes my lord?"
     }
+  },
+  "remote": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8765,
+    "lock_input": true,
+    "idle_timeout_s": 60,
+    "max_call_minutes": 30,
+    "tunnel": {
+      "enabled": true,
+      "show_window": true
+    }
   }
 }

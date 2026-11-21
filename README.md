@@ -144,6 +144,20 @@ Main knobs live in [`config/setup.json`](config/setup.json):
 - `ui` — setup window + chat bar geometry / auto-hide  
 - `voice` / `voice.wake_word` — STT + wake phrases  
 - `output.tts` — engine (`edge` / `sapi`), voice, wake ack  
+- `remote` — phone call server (see below)  
+
+## Phone call (speak from your phone)
+
+While the app runs you can "call" the PC from your phone: you speak, the agent acts and answers by voice. During the call physical keyboard/mouse input on the PC is blocked (the agent's own actions and the hand-gesture mouse still work). A red banner shows on the PC; **hold Esc for 3 s** to hang up, and Ctrl+Alt+Del always works. Say "hang up" or "goodbye" on the phone to end the call.
+
+1. Choose a phone password (>= 12 chars): type it in the Configuration window ("Phone password (.env)" > Save to .env), or set `REMOTE_TOKEN` in `.env`. Set `remote.enabled: true` in `config/setup.json`.
+2. Install the tunnel once: `winget install --id Cloudflare.cloudflared`.
+3. Start the app. It listens on `127.0.0.1:8765` only and starts a Cloudflare quick tunnel automatically (`remote.tunnel.enabled`). The public `https://….trycloudflare.com` link appears in the log and in the "Phone link" field (Copy / Open / QR buttons; scan the QR code with your phone camera); the Configuration window pops up when the link is ready (`remote.tunnel.show_window`).
+4. Open the link on your phone, enter the password, tap **Call**.
+
+The quick-tunnel link is **new on every start** (no account needed). For a fixed address use a Cloudflare named tunnel (needs a domain) or Tailscale.
+
+**Security:** the token gives full control of your PC. Keep it secret, prefer a private tunnel (Cloudflare Access / Tailscale), and leave `remote.enabled` off when unused. High-risk actions stay denied for phone tasks; tasks are logged with `source: remote` in `logs/audit.jsonl`.
 
 ## Logs
 
