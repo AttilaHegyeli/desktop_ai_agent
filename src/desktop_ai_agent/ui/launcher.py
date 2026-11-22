@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import tkinter as tk
+import webbrowser
 from tkinter import scrolledtext, ttk
-from typing import Any
+from typing import Any, Callable
 
 from desktop_ai_agent.core.chat_client import ChatClient
 from desktop_ai_agent.input.hotkey import HoldKey
+from desktop_ai_agent.input.input_lock import InputLock
 from desktop_ai_agent.core.config_loader import (
     load_dotenv,
     load_setup,
     openrouter_api_key,
+    remote_password,
+    save_env_value,
     save_openrouter_key_to_env,
     save_setup,
 )
@@ -44,15 +49,21 @@ from desktop_ai_agent.input.voice import (
 )
 from desktop_ai_agent.orchestrator.agent_loop import TaskResult
 from desktop_ai_agent.orchestrator.service import CONTEXT_TOKENS, AgentService
+from desktop_ai_agent.remote.call_session import CallController
+from desktop_ai_agent.remote.tunnel import TunnelManager
+from desktop_ai_agent.remote.server import RemoteConfigError, RemoteServer, validate_token
 from desktop_ai_agent.output.tts import (
     Speaker,
     TtsError,
     from_setup as tts_from_setup,
+    synthesize_mp3,
     tts_available,
     tts_enabled,
 )
+from desktop_ai_agent.ui.call_banner import CallBanner
 from desktop_ai_agent.ui.event_format import format_event
 from desktop_ai_agent.ui.hand_overlay import HandOverlay
+from desktop_ai_agent.ui.qr_dialog import QrUnavailable, show_qr
 from desktop_ai_agent.ui.overlay_bar import OverlayBar
 
 
@@ -97,6 +108,10 @@ class LauncherApp:
         self._hand_tracker: HandTracker | None = None
         self._hand_overlay: HandOverlay | None = None
         self._hand_mouse: HandMouseController | None = None
+        self._remote: RemoteServer | None = None
+        self._remote_call: CallController | None = None
+        self._input_lock: InputLock | None = None
+        self._tunnel: TunnelManager | None = None
 
         self._build()
         self._ensure_bar()
@@ -131,6 +146,34 @@ class LauncherApp:
             side=tk.LEFT, padx=(8, 0)
         )
 
+        pw_row = ttk.Frame(frame)
+        pw_row.pack(fill=tk.X, padx=4, pady=(0, 4))
+        ttk.Label(pw_row, text="Phone password (.env)").pack(side=tk.LEFT)
+        self._phone_pw_var = tk.StringVar(value=remote_password())
+        ttk.Entry(pw_row, textvariable=self._phone_pw_var, show="*", width=42).pack(
+            side=tk.LEFT, padx=(8, 0), fill=tk.X, expand=True
+        )
+        ttk.Button(pw_row, text="Save to .env", command=self._save_phone_password).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+
+        link_row = ttk.Frame(frame)
+        link_row.pack(fill=tk.X, padx=4, pady=(0, 8))
+        ttk.Label(link_row, text="Phone link").pack(side=tk.LEFT)
+        self._phone_link_var = tk.StringVar(value="(starts with the chat; needs remote.enabled)")
+        ttk.Entry(link_row, textvariable=self._phone_link_var, state="readonly", width=42).pack(
+            side=tk.LEFT, padx=(8, 0), fill=tk.X, expand=True
+        )
+        ttk.Button(link_row, text="Copy", command=self._copy_phone_link).pack(
+            side=tk.LEFT, padx=(8, 0)
+        )
+        ttk.Button(link_row, text="Open", command=self._open_phone_link).pack(
+            side=tk.LEFT, padx=(4, 0)
+        )
+        ttk.Button(link_row, text="QR", command=self._show_phone_qr).pack(
+            side=tk.LEFT, padx=(4, 0)
+        )
+
         ttk.Label(frame, text="Setup log").pack(anchor=tk.W, padx=4)
         self.log = scrolledtext.ScrolledText(
             frame, height=18, state=tk.DISABLED, wrap=tk.WORD, font=("Consolas", 9)
@@ -151,6 +194,58 @@ class LauncherApp:
 
         self._append_log("Starting automatically from: python -m app")
         self._append_log("Waiting for setup... the chat bar appears when ready.")
+
+    def _save_phone_password(self) -> None:
+        password = (self._phone_pw_var.get() or "").strip()
+        if not password:
+            save_env_value("REMOTE_TOKEN", "")
+            self._stop_remote()
+            self._append_log("[remote] phone password cleared: phone access is off")
+            return
+        try:
+            validate_token(password)
+            save_env_value("REMOTE_TOKEN", password)
+        except (RemoteConfigError, ValueError) as exc:
+            self._append_log(f"[remote] password not saved: {exc}")
+            return
+        self._append_log("[remote] phone password saved to .env (gitignored)")
+        if self._remote is not None:
+            self._remote.set_token(password)
+            self._append_log("[remote] new password is active now")
+        elif not (self.setup.get("remote") or {}).get("enabled"):
+            self._append_log('[remote] set "remote": {"enabled": true} in config/setup.json')
+        elif self._chat_ready:
+            self._start_remote_if_needed()
+
+    def _set_phone_link(self, url: str | None) -> None:
+        self._phone_link_var.set(url or "(no tunnel running)")
+        if url:
+            self._append_log(f"[remote] PHONE LINK: {url}  (new on every start)")
+            tunnel_cfg = (self.setup.get("remote") or {}).get("tunnel") or {}
+            if tunnel_cfg.get("show_window", True) and self._chat_ready:
+                self._show_setup_window()  # so the new link is easy to copy/open
+
+    def _show_phone_qr(self) -> None:
+        link = self._phone_link_var.get()
+        if not link.startswith("https://"):
+            self._append_log("[remote] no phone link yet: wait for the tunnel to start")
+            return
+        try:
+            show_qr(self.root, link)
+        except QrUnavailable as exc:
+            self._append_log(f"[remote] {exc}")
+
+    def _open_phone_link(self) -> None:
+        link = self._phone_link_var.get()
+        if link.startswith("https://"):
+            webbrowser.open(link)
+
+    def _copy_phone_link(self) -> None:
+        link = self._phone_link_var.get()
+        if link.startswith("https://"):
+            self.root.clipboard_clear()
+            self.root.clipboard_append(link)
+            self._append_log("[remote] phone link copied")
 
     def _save_api_key(self) -> None:
         key = (self._api_key_var.get() or "").strip()
@@ -344,9 +439,11 @@ class LauncherApp:
             bar.set_ready(True)
             bar.set_camera_active(self._camera_on)
             self._start_wake_if_needed()
+            self._start_remote_if_needed()
         else:
             bar.set_ready(False)
             bar.set_camera_active(False)
+            self._stop_remote()
             self._stop_wake()
             self._stop_camera()
             self._show_setup_window()
@@ -624,6 +721,7 @@ class LauncherApp:
             and not self._busy
             and self._mic_phase == "idle"
             and not self._tts_speaking
+            and not self._call_active()
         ):
             self._wake.resume(refresh_command=refresh_command)
         self._refresh_listen_flag()
@@ -656,7 +754,7 @@ class LauncherApp:
             self._ensure_bar().status_message(f"[voice] {detail}")
 
     def _on_wake_command(self, text: str) -> None:
-        if self._busy or not self._chat_ready or self._agent is None:
+        if self._busy or not self._chat_ready or self._agent is None or self._call_active():
             return
         text = (text or "").strip()
         if not text:
@@ -664,7 +762,7 @@ class LauncherApp:
         self._send_agent(text)
 
     def _on_mic(self) -> None:
-        if not self._voice_enabled:
+        if not self._voice_enabled or self._call_active():
             return
         if self._mic_phase == "recording":
             self._stop_mic_and_submit()
@@ -755,7 +853,7 @@ class LauncherApp:
         """CTRL held: cut speech + reply text + running task, then listen."""
         if self._mic_phase != "idle" or not self._chat_ready or self._agent is None:
             return
-        if not voice_available():
+        if self._call_active() or not voice_available():
             return
         bar = self._ensure_bar()
         if self._speaker is not None:
@@ -785,6 +883,7 @@ class LauncherApp:
             self._stop_mic_and_submit()
 
     def _on_close(self) -> None:
+        self._stop_remote()
         self._stop_wake()
         self._stop_camera()
         if self._ptt is not None and self._ptt.is_recording:
@@ -844,7 +943,7 @@ class LauncherApp:
         self._sync_model_dropdown()
 
     def _on_send(self) -> None:
-        if self._busy or not self._chat_ready or self._agent is None:
+        if self._busy or not self._chat_ready or self._agent is None or self._call_active():
             return
         bar = self._ensure_bar()
         text = bar.get_prompt()
@@ -853,14 +952,30 @@ class LauncherApp:
         bar.clear_prompt()
         self._send_agent(text)
 
-    def _send_agent(self, text: str) -> None:
+    def _send_agent(
+        self,
+        text: str,
+        *,
+        on_result: Callable[[str, str], None] | None = None,
+    ) -> None:
+        """Submit a task. ``on_result(status, reply)`` marks a phone-originated task:
+        its reply goes back to the phone and is not spoken on the PC speakers."""
         agent = self._agent
         assert agent is not None
+        remote = on_result is not None
         self._last_user = text
         self._set_busy(True)
         self._ensure_bar().set_task_running(True)
         self._ensure_bar().set_exchange(text, None)
-        self._append_log(f"> {text}")
+        self._append_log(f"> [phone] {text}" if remote else f"> {text}")
+        if remote:
+            audit = getattr(getattr(agent, "executor", None), "audit", None)
+            if audit is not None:
+                try:
+                    audit.record("task", source="remote", text=text)
+                except Exception:  # noqa: BLE001
+                    pass
+        final_reply: list[str] = []
 
         def on_event(kind: str, data: Any) -> None:
             try:
@@ -874,23 +989,161 @@ class LauncherApp:
             if kind == "final" and data:
                 reply = str(data)
                 self.root.after(0, self._on_agent_reply, reply)
-                self.root.after(0, self._speak, reply)
+                if remote:
+                    final_reply.append(reply)
+                else:
+                    self.root.after(0, self._speak, reply)
 
         def on_done(result: TaskResult) -> None:
             if result.status != "done":
                 msg = f"[{result.status}] {result.text}"
                 self.root.after(0, self._append_log, msg)
                 self.root.after(0, self._on_agent_reply, msg)
-                if result.text and result.status != "stopped":
+                if result.text and result.status != "stopped" and not remote:
                     self.root.after(0, self._speak, msg)
             self.root.after(0, self._ensure_bar().set_task_running, False)
             self.root.after(0, self._set_busy, False)
+            if on_result is not None:
+                reply = final_reply[-1] if final_reply else (result.text or "")
+                on_result(result.status, reply)
 
         if not agent.submit(text, on_event=on_event, on_done=on_done):
             self._append_log("[busy] the agent is still working on the previous request")
             self._ensure_bar().status_message("Busy — wait for the previous request")
             self._ensure_bar().set_task_running(False)
             self._set_busy(False)
+            if on_result is not None:
+                on_result("busy", "")
+
+    # ---- phone call ----------------------------------------------------
+    def _call_active(self) -> bool:
+        call = self._remote_call
+        return call is not None and call.active
+
+    def _start_remote_if_needed(self) -> None:
+        cfg = self.setup.get("remote") or {}
+        if not cfg.get("enabled") or self._remote is not None:
+            return
+        if not voice_available():
+            self._append_log('[remote] needs voice deps: pip install -e ".[voice]"')
+            return
+        try:
+            token = validate_token(os.environ.get("REMOTE_TOKEN"))
+        except RemoteConfigError as exc:
+            self._append_log(f"[remote] disabled: {exc}")
+            return
+        host = str(cfg.get("host", "127.0.0.1"))
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            self._append_log(
+                f"[remote] WARNING: bound to {host} without TLS. Prefer 127.0.0.1 + a tunnel."
+            )
+        engine = self._ensure_engine()
+        lock = InputLock(on_escape=lambda: self._remote_call and self._remote_call.end("escape"))
+        self._input_lock = lock
+        banner = CallBanner(self.root)
+
+        def on_start() -> None:
+            if cfg.get("lock_input", True):
+                lock.engage()
+            self.root.after(0, self._remote_call_began, banner, cfg)
+
+        def on_end(reason: str) -> None:
+            lock.release()  # immediately, from any thread
+            self.root.after(0, self._remote_call_ended, banner, reason)
+
+        call = CallController(
+            transcribe=engine.transcribe,
+            submit=self._remote_submit,
+            synthesize=lambda reply: synthesize_mp3(reply, self.setup),
+            stop_task=lambda: self._agent.stop() if self._agent is not None else None,
+            on_start=on_start,
+            on_end=on_end,
+            idle_timeout_s=float(cfg.get("idle_timeout_s", 60)),
+            max_call_s=float(cfg.get("max_call_minutes", 30)) * 60,
+        )
+        server = RemoteServer(
+            token=token,
+            call=call,
+            host=host,
+            port=int(cfg.get("port", 8765)),
+        )
+        try:
+            server.start()
+        except OSError as exc:
+            self._append_log(f"[remote] could not start server: {exc}")
+            return
+        self._remote = server
+        self._remote_call = call
+        self._append_log(f"[remote] phone call server on http://{server.host}:{server.port}")
+        if (cfg.get("tunnel") or {}).get("enabled", True):
+            self._tunnel = TunnelManager(
+                server.bound_port,
+                on_url=lambda url: self.root.after(0, self._set_phone_link, url),
+                on_log=lambda msg: self.root.after(0, self._append_log, msg),
+                exe=(cfg.get("tunnel") or {}).get("cloudflared_path"),
+            )
+            if self._tunnel.start():
+                self._append_log("[tunnel] starting... the phone link appears here in a few seconds")
+
+    def _stop_remote(self) -> None:
+        tunnel, self._tunnel = self._tunnel, None
+        if tunnel is not None:
+            tunnel.stop()
+            self._set_phone_link(None)
+        server, self._remote, self._remote_call = self._remote, None, None
+        if server is not None:
+            server.stop()
+        if self._input_lock is not None:
+            self._input_lock.release()
+
+    def _remote_submit(self, text: str) -> tuple[str, str] | None:
+        """Run a phone task through the normal chat path (called off the Tk thread)."""
+        done = threading.Event()
+        box: dict[str, tuple[str, str]] = {}
+
+        def finish(status: str, reply: str) -> None:
+            box["r"] = (status, reply)
+            done.set()
+
+        def start() -> None:
+            if self._busy or not self._chat_ready or self._agent is None:
+                finish("busy", "")
+            else:
+                self._send_agent(text, on_result=finish)
+
+        self.root.after(0, start)
+        if not done.wait(240):
+            if self._agent is not None:
+                self._agent.stop()
+            return ("failed", "The task took too long.")
+        status, reply = box["r"]
+        return None if status == "busy" else (status, reply)
+
+    def _remote_call_began(self, banner: CallBanner, cfg: dict[str, Any]) -> None:
+        self._pause_wake()
+        self._append_log("[remote] phone call started")
+        engine = self._engine
+        if engine is not None:
+            threading.Thread(target=self._warm_stt, args=(engine,), daemon=True).start()
+        if cfg.get("lock_input", True):
+            banner.show("hold Esc 3s to hang up")
+        else:
+            banner.show("input not locked")
+
+    @staticmethod
+    def _warm_stt(engine: WhisperEngine) -> None:
+        """Load the Whisper model now so the first spoken sentence is not slow."""
+        try:
+            import numpy as np
+
+            engine.transcribe(np.zeros(8000, dtype=np.float32), vad_filter=False)
+        except Exception:  # noqa: BLE001 - the real utterance reports errors
+            pass
+
+    def _remote_call_ended(self, banner: CallBanner, reason: str) -> None:
+        banner.hide()
+        self._append_log(f"[remote] phone call ended ({reason})")
+        self._resume_wake()
 
     def _on_agent_reply(self, reply: str) -> None:
         self._ensure_bar().set_exchange(self._last_user, reply)

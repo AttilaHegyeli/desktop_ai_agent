@@ -132,6 +132,56 @@ def text_for_speech(text: str) -> str:
     return cleaned
 
 
+def synthesize_edge_to_file(text: str, voice: str, rate: str, path: str) -> None:
+    """Render ``text`` to an mp3 at ``path`` with edge-tts (no playback)."""
+    import edge_tts
+
+    communicate = edge_tts.Communicate(text, voice, rate=rate)
+
+    async def _save() -> None:
+        await communicate.save(path)
+
+    asyncio.run(_save())
+
+
+def synthesize_mp3(text: str, setup: dict[str, Any] | None = None) -> bytes:
+    """Return mp3 bytes for ``text`` using setup ``output.tts`` voice/rate.
+
+    Used by the phone call so replies play on the phone, not the PC speakers.
+    """
+    cfg = ((setup or {}).get("output") or {}).get("tts") or {}
+    voice = cfg.get("voice") or _DEFAULT_EDGE_VOICE
+    # SAPI voice names are not valid edge voices.
+    if str(cfg.get("engine") or _DEFAULT_ENGINE).lower() == "sapi":
+        voice = _DEFAULT_EDGE_VOICE
+    rate = _edge_rate(cfg.get("rate", "+0%"))
+    spoken = text_for_speech(text)[:MAX_SPEAK_CHARS]
+    if not spoken:
+        return b""
+    if not edge_tts_available():
+        raise TtsError('Neural TTS deps missing. Install with: pip install -e ".[tts]"')
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+    path = tmp.name
+    tmp.close()
+    try:
+        synthesize_edge_to_file(spoken, str(voice), rate, path)
+        with open(path, "rb") as fh:
+            return fh.read()
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def edge_tts_available() -> bool:
+    try:
+        import edge_tts  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 class Speaker:
     """Queue text and speak it on a background thread (non-blocking for Tk)."""
 
@@ -249,7 +299,6 @@ class Speaker:
 
     def _speak_edge(self, text: str) -> None:
         """Neural Microsoft voices via edge-tts + pygame playback."""
-        import edge_tts
         import pygame
 
         voice = self.voice or _DEFAULT_EDGE_VOICE
@@ -258,12 +307,7 @@ class Speaker:
         path = tmp.name
         tmp.close()
         try:
-            communicate = edge_tts.Communicate(text, voice, rate=rate)
-
-            async def _save() -> None:
-                await communicate.save(path)
-
-            asyncio.run(_save())
+            synthesize_edge_to_file(text, voice, rate, path)
             if self._stop_playback.is_set():
                 return
 

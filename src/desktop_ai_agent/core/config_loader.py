@@ -52,11 +52,15 @@ def load_dotenv(path: Any = None, *, override: bool = False) -> dict[str, str]:
     return loaded
 
 
-def save_openrouter_key_to_env(api_key: str, path: Any = None) -> None:
-    """Write/update OPENROUTER_API_KEY in .env (create file if missing)."""
+def save_env_value(key_name: str, value: str, path: Any = None) -> None:
+    """Write/update ``KEY=value`` in .env (create the file if missing).
+
+    An empty value removes the line. Also updates ``os.environ`` for this process.
+    """
     target = Path(path or ENV_FILE)
-    key_name = "OPENROUTER_API_KEY"
-    value = (api_key or "").strip()
+    value = (value or "").strip()
+    if "\n" in value or "\r" in value:
+        raise ValueError("value must be a single line")
     lines: list[str] = []
     if target.is_file():
         lines = target.read_text(encoding="utf-8").splitlines()
@@ -68,7 +72,7 @@ def save_openrouter_key_to_env(api_key: str, path: Any = None) -> None:
             found = True
             if value:
                 out.append(f"{key_name}={value}")
-            # omit line when clearing the key
+            # omit line when clearing the value
             continue
         out.append(line)
     if value and not found:
@@ -81,6 +85,19 @@ def save_openrouter_key_to_env(api_key: str, path: Any = None) -> None:
         os.environ[key_name] = value
     else:
         os.environ.pop(key_name, None)
+
+
+def save_openrouter_key_to_env(api_key: str, path: Any = None) -> None:
+    """Write/update OPENROUTER_API_KEY in .env (create file if missing)."""
+    save_env_value("OPENROUTER_API_KEY", api_key, path)
+
+
+def remote_password() -> str:
+    """Phone-call password: REMOTE_TOKEN from the process env / .env."""
+    global _dotenv_loaded
+    if not _dotenv_loaded:
+        load_dotenv()
+    return (os.environ.get("REMOTE_TOKEN") or "").strip()
 
 
 def load_secrets(path: Any = None) -> dict[str, Any]:
