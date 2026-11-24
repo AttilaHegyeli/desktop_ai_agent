@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 import threading
 import unicodedata
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -43,6 +44,7 @@ _APP_ALIASES = {"Shell_TrayWnd": "taskbar", "Progman": "desktop", "WorkerW": "de
 
 # UI Automation property ids
 _NAME, _CONTROL_TYPE, _RECT, _OFFSCREEN, _IS_PASSWORD = 30005, 30003, 30001, 30022, 30019
+_VALUE, _EDIT = 30045, 50004  # ValuePattern.Value, Edit control type
 
 _DESKTOP_CLASSES = frozenset({"Progman", "WorkerW"})
 
@@ -308,6 +310,57 @@ def list_ui_elements(
                           root_at=root_at if visible_only else None, stats=stats)
 
 
+# ---- a browser window's address (for handing a page over to the agent's browser) ---
+
+_OTHER_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
+
+
+def normalize_address(value: str) -> str | None:
+    """An address bar's text as a full http(s) URL, or None when it is not a web page.
+
+    Browsers hide 'https://' in the address bar, so a bare 'youtube.com/watch?v=x' gets
+    it back. Search text being typed, internal pages (opera://, chrome://, about:) and
+    files are not web pages.
+    """
+    text = _clean(value)
+    if not text or " " in text:
+        return None
+    lower = text.casefold()
+    if not lower.startswith(("http://", "https://")):
+        if _OTHER_SCHEME.match(text) and not re.match(r"^[^/:]+:\d+(/|$)", text):  # host:port is fine
+            return None
+        text = "https://" + text
+    host = urlparse(text).hostname or ""
+    return text if "." in host or host == "localhost" else None
+
+
+def pick_address(values: list[str]) -> str | None:
+    """The first value that is a web address (the address bar comes before page fields)."""
+    for value in values:
+        url = normalize_address(value)
+        if url:
+            return url
+    return None
+
+
+def address_bar_url(hwnd: int, timeout: float = 3.0) -> str | None:  # pragma: no cover - needs Windows
+    """The web address shown in a browser window, read through UI Automation, or None."""
+    box: dict[str, Any] = {}
+
+    def work() -> None:
+        try:
+            box["values"] = _edit_values(hwnd)
+        except Exception as exc:  # noqa: BLE001 - reported as "unknown"
+            box["error"] = exc
+
+    worker = threading.Thread(target=work, daemon=True, name="uia-address")
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive() or "error" in box:
+        return None
+    return pick_address(box.get("values") or [])
+
+
 # ---- Windows (thin, not unit tested) ----------------------------------------------
 
 def _uia() -> tuple[Any, Any]:  # pragma: no cover - needs Windows + comtypes
@@ -375,6 +428,32 @@ def _collect_rows(max_elements: int) -> list[dict[str, Any]]:  # pragma: no cove
             except Exception:  # noqa: BLE001
                 continue
     return rows
+
+
+def _edit_values(hwnd: int, limit: int = 20) -> list[str]:  # pragma: no cover - needs Windows
+    """Values of the first `limit` Edit fields in a window, in tree order."""
+    import gc
+
+    import comtypes
+
+    comtypes.CoInitializeEx(comtypes.COINIT_APARTMENTTHREADED)  # this is a worker thread
+    try:
+        U, uia = _uia()
+        root = uia.ElementFromHandle(hwnd)
+        cache = uia.CreateCacheRequest()
+        cache.AddProperty(_VALUE)
+        found = root.FindAllBuildCache(U.TreeScope_Descendants, uia.CreatePropertyCondition(_CONTROL_TYPE, _EDIT), cache)
+        values: list[str] = []
+        for j in range(min(found.Length, limit) if found else 0):
+            try:
+                values.append(str(found.GetElement(j).GetCachedPropertyValue(_VALUE) or ""))
+            except Exception:  # noqa: BLE001
+                continue
+        del found, root, cache
+        return values
+    finally:
+        gc.collect()  # release every COM object before CoUninitialize
+        comtypes.CoUninitialize()
 
 
 _user32: Any = None

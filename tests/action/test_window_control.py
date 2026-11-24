@@ -6,7 +6,8 @@ import unittest
 from unittest import mock
 
 from desktop_ai_agent.action import executor as executor_mod
-from desktop_ai_agent.action.tools import mouse_safety, ui_control, window_control as wc
+from desktop_ai_agent.action.tools import mouse_safety, page_control, ui_control, window_control as wc
+from desktop_ai_agent.action.tools.page_control import TabInfo
 from desktop_ai_agent.input.windows import WindowInfo
 
 SPOTIFY = WindowInfo(11, "Liked Songs - Spotify", "Spotify", 1)
@@ -28,6 +29,7 @@ class Case(unittest.TestCase):
         self.closes_after = {}  # hwnd -> seconds until it disappears after WM_CLOSE (absent = never)
         self.closed_at = {}
         self.in_front = True
+        self.tabs = []  # the agent browser's tabs (none: it is not open)
 
         def state(hwnd):
             gone = hwnd in self.closed_at and self.now >= self.closed_at[hwnd]
@@ -51,6 +53,7 @@ class Case(unittest.TestCase):
             mock.patch.object(wc, "_bring_to_front",
                               side_effect=lambda h: self.calls.append(("front", h)) or self.in_front),
             mock.patch.object(wc, "_request_close", side_effect=close),
+            mock.patch.object(wc, "_tabs", side_effect=lambda: list(self.tabs)),
         ]
         for p in patches:
             p.start()
@@ -239,6 +242,74 @@ class TestWiring(Case):
         self.assertEqual(r.status, "error")
         self.assertIn("Several windows match", r.error)
 
+
+
+OPERA = WindowInfo(41, "YouTube - Opera", "opera", 9)
+YT_TAB = TabInfo(1, "YouTube", "https://www.youtube.com/", True, 41, 9)
+GH_TAB = TabInfo(2, "GitHub", "https://github.com/", False, 41, 9)
+
+
+class TestTabs(Case):
+    """The agent browser's tabs share the window list and tools; page_control is faked."""
+
+    def setUp(self):
+        super().setUp()
+        self.wins = [OPERA, SPOTIFY, EDGE_2]
+        self.alive.update({41: True})
+        self.tabs = [YT_TAB, GH_TAB]
+        self.tab_calls = []
+        for name, result in (("focus_tab", {"tab": "x", "in_front": True}), ("close_tab", {"tab": "x", "closed": True})):
+            patcher = mock.patch.object(page_control, name, side_effect=lambda tab, n=name, r=result: (
+                self.tab_calls.append((n, tab.key)) or dict(r)))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_tabs_are_listed_under_their_window(self):
+        lines = wc.list_windows()["windows"].splitlines()
+        self.assertEqual(lines[:3], [
+            '1: "YouTube - Opera" (opera)',
+            '  2: tab "YouTube" (www.youtube.com, current)',
+            '  3: tab "GitHub" (github.com)',
+        ])
+        self.assertEqual(lines[3], '4: "Liked Songs - Spotify" (Spotify)')
+
+    def test_a_tab_wins_over_windows_with_the_same_name(self):
+        # "youtube" also matches the Opera window and Edge's YouTube window.
+        result = wc.window_control("focus", name="youtube")
+        self.assertEqual(self.tab_calls, [("focus_tab", 1)])
+        self.assertEqual(result["action"], "focus")
+
+    def test_switch_and_close_by_number(self):
+        wc.list_windows()
+        wc.window_control("focus", number=3)
+        wc.window_control("close", number=2)
+        self.assertEqual(self.tab_calls, [("focus_tab", 2), ("close_tab", 1)])
+        self.assertEqual([c for c in self.calls if c[0] == "close"], [])  # no window got WM_CLOSE
+
+    def test_minimize_on_a_tab_minimizes_its_window(self):
+        result = wc.window_control("minimize", name="github")
+        self.assertIn(("show", 41, 6), self.calls)
+        self.assertEqual(result["window"], "YouTube - Opera")
+
+    def test_a_closed_tab_number_is_refused(self):
+        wc.list_windows()
+        self.tabs = [YT_TAB]
+        with self.assertRaisesRegex(LookupError, "no longer open"):
+            wc.window_control("focus", number=3)
+
+    def test_unreadable_tabs_are_reported(self):
+        self.tabs = []
+        with mock.patch.object(wc, "_tab_problem", return_value="Browser: Target closed"):
+            result = wc.list_windows()
+        self.assertIn("tabs could not be read (Browser: Target closed)", result["note"])
+
+    def test_several_tabs_match_nothing_changes(self):
+        # Neither title is exactly "youtube" (an exact title would win outright).
+        self.tabs = [TabInfo(1, "lofi radio - YouTube", "https://www.youtube.com/watch", True, 41, 9),
+                     TabInfo(3, "YouTube Music", "https://music.youtube.com/", False, 41, 9)]
+        with self.assertRaisesRegex(LookupError, "Several windows match"):
+            wc.window_control("close", name="youtube")
+        self.assertEqual(self.tab_calls, [])
 
 if __name__ == "__main__":
     unittest.main()

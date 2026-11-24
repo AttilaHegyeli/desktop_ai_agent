@@ -10,7 +10,7 @@
     ]
   },
   "core_ai": {
-    "selected": "local:gemma4",
+    "selected": "openrouter:openai/gpt-4.1",
     "local_context_tokens": 8192,
     "openrouter": {
       "base_url": "https://openrouter.ai/api/v1",

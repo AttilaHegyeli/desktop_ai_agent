@@ -16,6 +16,7 @@ RUNTIME_PACKAGES: tuple[str, ...] = (
     "Pillow>=10.0",
     "pymupdf>=1.24",
     "ddgs>=9.0",
+    "playwright>=1.65",  # drives the agent's own browser; built and tested on 1.65
     "faster-whisper>=1.0",
     "sounddevice>=0.4",
     "numpy>=1.26",

@@ -199,5 +199,41 @@ class TestDefaultSetup(unittest.TestCase):
         self.assertEqual(res[0].status, "rejected")
 
 
+
+
+class TestReadableAndPrivate(unittest.TestCase):
+    """Tool results keep real letters; typed text never reaches the audit log."""
+
+    def test_results_keep_accents(self):
+        from desktop_ai_agent.action.executor import StepResult
+
+        msg = StepResult(0, "list_elements", "executed", output={"elements": '1: Button "Beállítások"'}).to_message()
+        self.assertIn("Beállítások", msg)
+        self.assertNotIn(r"\u00e1", msg)  # the letter itself, not its escape
+
+    def test_private_values_are_logged_as_their_length(self):
+        from desktop_ai_agent.action.audit_log import AuditLog
+        from desktop_ai_agent.action.executor import Executor
+        from desktop_ai_agent.action.registry import ActionRegistry, ActionSpec, Param, Risk
+
+        spec = ActionSpec("type_text", "t", Risk.MEDIUM, (
+            Param("element", "integer", "e"), Param("text", "string", "t", private=True)))
+        audit = AuditLog()
+        ran = []
+        ex = Executor(ActionRegistry([spec]), {"type_text": lambda a: ran.append(a) or "ok"}, audit=audit)
+        ex.run([{"name": "type_text", "arguments": {"element": 2, "text": "secret-pass"}}])
+        self.assertEqual(ran, [{"element": 2, "text": "secret-pass"}])  # the handler still gets it
+        logged = [e for e in audit.entries if e["event"] == "execute"][0]["args"]
+        self.assertNotIn("secret-pass", str(audit.entries))
+        self.assertIn("11 characters", str(logged))
+
+    def test_the_real_type_text_is_private(self):
+        from desktop_ai_agent.action.registry import build_default_registry
+
+        params = {p.name: p for p in build_default_registry().get("type_text").params}
+        self.assertTrue(params["text"].private)
+        self.assertFalse(params["element"].private)
+
+
 if __name__ == "__main__":
     unittest.main()

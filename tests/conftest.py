@@ -11,6 +11,27 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 
+@pytest.fixture(autouse=True)
+def _no_real_browser(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test may start, find or reach a real browser (AGENT.MD rule 8).
+
+    The browser session gets an opener that always refuses, the default-browser lookup
+    reads nothing, and page_control's window helpers see no windows. Tests that need a
+    browser give page_control a fake session of their own.
+    """
+    from desktop_ai_agent.action.tools import browser_session, page_control
+
+    def refuse(launch: bool, old: object) -> object:
+        raise browser_session.NotRunning("tests never open a real browser")
+
+    monkeypatch.setattr(browser_session, "_read_default_command", lambda: "")
+    monkeypatch.setattr(browser_session, "SESSION", browser_session.BrowserSession(opener=refuse))
+    monkeypatch.setattr(page_control, "_windows", lambda: [])
+    monkeypatch.setattr(page_control, "_address_of", lambda hwnd: None)
+    monkeypatch.setattr(page_control, "_bring_to_front", lambda hwnd: False)
+    page_control.reset()
+
+
 @pytest.fixture
 def sample_entries() -> list[dict[str, str]]:
     return [

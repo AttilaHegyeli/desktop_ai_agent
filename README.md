@@ -18,12 +18,12 @@ text / voice  →  input  →  orchestrator  →  gemma4 (core)  →  action lay
 | **Chat** | Always-on-top top-edge bar (hover to expand; context meter; Stop / New chat / Config) |
 | **Voice in** | Mic push-to-talk + wake word (“hey Zsuzsi” / variants) via faster-whisper |
 | **Core AI** | Ollama + `gemma4` / `gemma4-agent`, tool calling, folder index (apps + AppX) |
-| **Actions** | `open_app`, `web_search`, `web_open`, `screenshot`, `wait`, `list_elements`, `move_mouse`, `click`, `type_text`, `provide_script` (display only) |
+| **Actions** | `open_app`, `web_search`, `web_open`, `screenshot`, `wait`, `list_elements`, `move_mouse`, `click`, `type_text`, `browser_read`, `browser_go`, `provide_script` (display only) |
 | **Voice out** | TTS via edge-tts (or offline SAPI) |
 | **Safety** | Registry + executor gate; high-risk actions denied until confirm UI exists |
 | **Deps** | Runtime packages install **automatically on every start** |
 
-Not in this demo yet: full browser automation, camera gestures, free `exec` of model code.
+Not in this demo yet: the browser extension for your everyday browser profile, free `exec` of model code.
 
 ## Quick start
 
@@ -87,6 +87,22 @@ Voice / TTS / screenshot / UI Automation packages are part of the startup instal
 - **Leaked calls:** recovers Gemma `call:name{…}` text into real tool calls when needed
 - **Handoff / compaction:** at ~**85%** of the 8k context (`CONTEXT_TOKENS = 8192`), up to **3** handoffs
 - **UI control flow:** `list_elements` → `move_mouse` / `click` / `type_text` (list cleared after click/type)
+- **Web pages:** same tools; an element keeps its number while it stays on the page. After a page click only what appeared (e.g. the menu it opened) is listed, and it stays first until the next click
+
+### The agent's browser
+
+- `web_open` opens pages in the agent's **own** browser: your default browser (it must be Chromium-based:
+  Chrome, Edge, Opera, Brave, Vivaldi) started with a separate profile in
+  `%LOCALAPPDATA%\desktop_ai_agent\browser\<browser>\profile`. Log in there once; it stays logged in.
+- It is driven through Playwright over a local control port (127.0.0.1). It stays open when the app
+  closes, and the next start reconnects (port saved in `session.json` next to the profile).
+- Page lists come from the page's accessibility snapshot (`list_elements(area="page")`, or automatically
+  when that browser is in front). If **your own** browser is in front, its page is opened in the agent's
+  browser first. Tabs appear under its window in `list_windows`; `window_control` switches / closes them.
+- Safety: no typing into password fields, Enter only in search fields, risky buttons (send, post, submit,
+  turn in, delete, buy, ...) refused, cookie buttons only after you answer, downloads blocked. With a
+  cloud model, Gmail / Classroom / Docs / Drive are read only after you say "proceed" (until New chat).
+- While the app is connected, page popups (alert / confirm / "Leave site?") are answered "cancel".
 
 ### Actions (registry risk)
 
@@ -95,13 +111,15 @@ Voice / TTS / screenshot / UI Automation packages are part of the startup instal
 | `screenshot` | low | `primary` / `all` / `monitor` / `region`; agent windows excluded from capture |
 | `wait` | low | 0–30 s |
 | `web_search` | low | DuckDuckGo snippets via `ddgs` |
-| `list_elements` | low | active / taskbar / desktop / all (max ~60; list valid ~60s) |
+| `list_elements` | low | active / taskbar / desktop / all / page (max ~60; list valid ~60s) |
+| `browser_read` | low | page text in parts, or around a `find` phrase |
 | `provide_script` | low | display-only JSON; **ends turn**; never executed |
 | `open_app` | medium | indexed launchers only; no launch args |
-| `web_open` | medium | `http` / `https` only |
-| `move_mouse` | medium | by element number (model never sends raw coords) |
+| `web_open` | medium | `http` / `https` only; new tab in the agent's browser |
+| `browser_go` | medium | back / forward / reload |
+| `move_mouse` | medium | by element number (model never sends raw coords); outlines it on a web page |
 | `click` | medium | left/right, optional double; rate-limited; corner emergency stop |
-| `type_text` | medium | paste into inputs; no Enter; no passwords; risky-name gate |
+| `type_text` | medium | paste into inputs; Enter only via `submit` in web search fields; no passwords |
 
 ## Project layout
 

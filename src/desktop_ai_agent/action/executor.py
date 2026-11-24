@@ -48,7 +48,8 @@ class StepResult:
             payload["output"] = self.output
         else:
             payload["error"] = self.error
-        return json.dumps(payload, default=str)
+        # Real letters, not \u escapes: "Beállítások" stays readable and costs fewer tokens.
+        return json.dumps(payload, default=str, ensure_ascii=False)
 
 
 class _PlanRejected(Exception):
@@ -102,6 +103,15 @@ class Executor:
             steps.append((spec, args))
         return steps
 
+    @staticmethod
+    def _loggable(spec: ActionSpec, args: dict[str, Any]) -> dict[str, Any]:
+        """`args` for the audit log: private values (typed text) become their length."""
+        private = {p.name for p in spec.params if p.private}
+        return {
+            k: (f"<{len(v)} characters>" if k in private and isinstance(v, str) else v)
+            for k, v in args.items()
+        }
+
     def _ask(self, spec: ActionSpec, args: dict[str, Any]) -> bool:
         if self.confirm is None:
             return False  # deny by default
@@ -122,11 +132,13 @@ class Executor:
         for i, (spec, args) in enumerate(steps):
             if spec.risk in self.confirm_risks and not self._ask(spec, args):
                 msg = "User declined, or no confirmation available"
-                self.audit.record("declined", step=i, action=spec.name, risk=spec.risk.value, args=args)
+                self.audit.record("declined", step=i, action=spec.name, risk=spec.risk.value,
+                                  args=self._loggable(spec, args))
                 results.append(StepResult(i, spec.name, "declined", error=msg))
                 break
 
-            self.audit.record("execute", step=i, action=spec.name, risk=spec.risk.value, args=args)
+            self.audit.record("execute", step=i, action=spec.name, risk=spec.risk.value,
+                              args=self._loggable(spec, args))
             try:
                 output = self._handlers[spec.name](args)
             except Exception as exc:  # handler failures must never crash the loop

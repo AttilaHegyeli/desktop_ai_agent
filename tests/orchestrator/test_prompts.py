@@ -14,7 +14,7 @@ from desktop_ai_agent.orchestrator.prompts import (
 _NAMED_IN_PROMPT = frozenset(
     {
         "provide_script", "web_search", "web_open", "screenshot", "list_elements", "move_mouse",
-        "click", "type_text", "wait", "window_control",
+        "click", "type_text", "wait", "window_control", "browser_read",
     }
 )
 

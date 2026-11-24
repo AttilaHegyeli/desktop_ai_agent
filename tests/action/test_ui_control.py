@@ -8,7 +8,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 from desktop_ai_agent.action import executor as executor_mod
-from desktop_ai_agent.action.tools import ui_control
+from desktop_ai_agent.action.tools import page_control, ui_control
+from desktop_ai_agent.input.page_elements import PageElement
 from desktop_ai_agent.input.ui_elements import UiElement
 
 EDGE, TASKBAR, DESKTOP = 100, 200, 300
@@ -502,6 +503,117 @@ class TestWiring(Case):
         self.assertEqual(r.status, "error")
         self.assertIn("Call list_elements first", json.loads(r.to_message())["error"])
 
+
+
+PAGE = [
+    PageElement(1, "Search", "ComboBox", "combobox", "e3", page_key=1),
+    PageElement(2, "lofi hip hop radio", "Hyperlink", "link", "e6", page_key=1, where="below"),
+    PageElement(3, "Accept all", "Button", "button", "e9", page_key=1),
+    PageElement(4, "Post", "Button", "button", "e10", page_key=1),
+]
+
+
+class TestWebPages(Case):
+    """Web pages go through the same tools; page_control (the browser side) is faked."""
+
+    def setUp(self):
+        super().setUp()
+        self.kind = None  # what _browser_kind says about the window in front
+        self.page_calls = []
+        self.handover_ok = True
+
+        def list_page(request, cloud, handover_hwnd, strict):
+            self.page_calls.append(("list", request, cloud, handover_hwnd, strict))
+            if handover_hwnd and strict and not self.handover_ok:
+                raise page_control.HandOverFailed("no web page")
+            return list(PAGE), {"area": "page", "page": "YouTube", "count": len(PAGE), "elements": "..."}
+
+        patches = [
+            mock.patch.object(ui_control, "_browser_kind", side_effect=lambda hwnd: self.kind),
+            mock.patch.object(ui_control, "_list_page", side_effect=list_page),
+            mock.patch.object(page_control, "click", side_effect=lambda el, button, double: (
+                self.page_calls.append(("click", el.ref, button, double)) or {"clicked": el.name, "page": "YouTube"})),
+            mock.patch.object(page_control, "type_into", side_effect=lambda el, text, submit: (
+                self.page_calls.append(("type", el.ref, text, submit)) or {"typed_into": el.name, "page": "YouTube"})),
+            mock.patch.object(page_control, "highlight", side_effect=lambda el: (
+                self.page_calls.append(("highlight", el.ref)) or {"highlighted": el.name})),
+        ]
+        for patcher in patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_agent_browser_in_front_lists_the_page(self):
+        self.kind = "agent"
+        result = ui_control.list_elements("active", request="play lofi", cloud=True)
+        self.assertEqual(result["area"], "page")
+        self.assertEqual(self.page_calls, [("list", "play lofi", True, None, False)])
+        self.assertEqual(self.scans, 0)  # no desktop scan
+
+    def test_area_page_works_whatever_is_in_front(self):
+        result = ui_control.list_elements("page")
+        self.assertEqual(result["area"], "page")
+
+    def test_users_browser_is_handed_over(self):
+        self.kind = "user"
+        ui_control.list_elements("active")
+        self.assertEqual(self.page_calls, [("list", "", False, EDGE, True)])
+        self.assertEqual(ui_control.user_browser_in_front(), EDGE)
+
+    def test_users_browser_without_a_web_page_lists_the_window(self):
+        self.kind, self.handover_ok = "user", False
+        result = ui_control.list_elements("active")
+        self.assertEqual(result["window"], "New tab - Microsoft Edge")
+        self.assertEqual(self.scans, 1)
+
+    def test_one_list_at_a_time(self):
+        ui_control.list_elements("taskbar")
+        ui_control.list_elements("page")
+        with self.assertRaisesRegex(LookupError, "not in the latest list"):
+            ui_control.click(5)  # the desktop list's numbers are gone
+        ui_control.click(2)
+        self.assertEqual(self.page_calls[-1], ("click", "e6", "left", False))
+        self.assertEqual(self.clicks, [])  # no real mouse click
+        self.assertEqual(self.cursor, [])
+        self.now += 2  # past the click rate limit
+        with self.assertRaisesRegex(LookupError, "cleared by your last click"):
+            ui_control.click(2)
+
+    def test_page_click_keeps_the_safety_rules(self):
+        ui_control.list_elements("page")
+        with self.assertRaisesRegex(PermissionError, "looks risky .'Post'"):
+            ui_control.click(4)
+        with self.assertRaisesRegex(PermissionError, "cookie"):
+            ui_control.click(3, request="open youtube")
+        self.now += 2
+        ui_control.click(3, request="yes, accept")
+        self.assertEqual(self.page_calls[-1][:2], ("click", "e9"))
+
+    def test_type_text_on_a_page(self):
+        ui_control.list_elements("page")
+        ui_control.type_text(1, "lofi", submit=True)
+        self.assertEqual(self.page_calls[-1], ("type", "e3", "lofi", True))
+        self.assertEqual(self.pasted, [])
+
+    def test_type_text_refuses_non_fields_and_desktop_submit(self):
+        ui_control.list_elements("page")
+        with self.assertRaisesRegex(ValueError, "not an input field"):
+            ui_control.type_text(2, "x")
+        ui_control.list_elements("taskbar")
+        with self.assertRaisesRegex(ValueError, "only in search fields on web pages"):
+            ui_control.type_text(1, "x", submit=True)
+
+    def test_move_mouse_highlights_on_a_page(self):
+        ui_control.list_elements("page")
+        self.assertEqual(ui_control.move_mouse(2), {"highlighted": "lofi hip hop radio"})
+        self.assertEqual(self.cursor, [])
+
+    def test_web_risky_words(self):
+        for name in ("Turn in", "Hand in", "Unsubmit", "Submit", "Post", "Publish", "Merge pull request", "Comment"):
+            with self.subTest(name=name):
+                self.assertIsNotNone(ui_control.risky_word(name))
+        for name in ("Posts", "Comments", "Postcode", "Submitted work"):
+            with self.subTest(name=name):
+                self.assertIsNone(ui_control.risky_word(name))
 
 if __name__ == "__main__":
     unittest.main()

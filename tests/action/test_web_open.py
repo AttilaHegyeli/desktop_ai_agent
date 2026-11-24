@@ -1,4 +1,4 @@
-"""Tests for web_open. No real browser: webbrowser.open is always mocked."""
+"""Tests for web_open. No real browser: the opener is always replaced."""
 import unittest
 from unittest import mock
 
@@ -36,15 +36,11 @@ class TestOpenHelper(unittest.TestCase):
 
 
 class TestWebOpenHandler(unittest.TestCase):
-    def setUp(self):
-        # No real window is enumerated or focused (window_wait has its own tests).
-        patcher = mock.patch.object(handlers, "_with_page_window", lambda open_page: open_page())
-        patcher.start()
-        self.addCleanup(patcher.stop)
+    """web_open goes to the agent's own browser; the browser is always replaced here."""
 
-    def test_handler_uses_helper(self):
+    def test_handler_opens_in_the_agent_browser(self):
         with mock.patch.object(
-            handlers, "_open_url", return_value={"opened": "https://youtube.com"}
+            handlers, "_open_in_browser", return_value={"opened": "https://youtube.com", "page": "YouTube"}
         ) as m:
             out = handlers.web_open({"url": "https://youtube.com"})
         m.assert_called_once_with("https://youtube.com")
@@ -57,12 +53,17 @@ class TestWebOpenHandler(unittest.TestCase):
         self.assertIn("youtube.com", clean["url"])
 
         with mock.patch.object(
-            handlers, "_open_url", return_value={"opened": clean["url"]}
+            handlers, "_open_in_browser", return_value={"opened": clean["url"]}
         ):
             res = default_executor().run(
                 [{"name": "web_open", "arguments": {"url": clean["url"]}}]
             )
         self.assertTrue(res[0].ok)
+
+    def test_check_url_is_shared_with_the_agent_browser(self):
+        self.assertEqual(mod.check_url("  https://x.org/a "), "https://x.org/a")
+        with self.assertRaisesRegex(ValueError, "http:// or https://"):
+            mod.check_url("opera://settings")
 
     def test_missing_url_rejected(self):
         with self.assertRaises(ValidationError):

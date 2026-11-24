@@ -105,11 +105,12 @@ class AgentService:
 
     def reset(self) -> None:
         """Forget the conversation (e.g. a 'New chat' button)."""
-        from desktop_ai_agent.action.tools import ui_control, window_control
+        from desktop_ai_agent.action.tools import page_control, ui_control, window_control
 
         self.client.clear()
         ui_control.reset()
         window_control.reset()
+        page_control.reset()  # cloud OKs for private sites last until New chat
 
     def stop(self) -> None:
         """Ask the running task to stop: cuts the model reply, skips pending steps.

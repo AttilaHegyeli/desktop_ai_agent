@@ -25,3 +25,4 @@ class TaskState:
     added_chars: int = 0  # text added to the chat since the model last replied
     handoffs: int = 0
     handoff_mark: int = 0  # len(steps) at the last handoff
+    cloud: bool = False  # the active model runs in the cloud (private web pages need an OK)

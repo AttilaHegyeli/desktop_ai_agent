@@ -46,6 +46,8 @@ class Param:
     # Injected: filled by the orchestrator from what it knows (e.g. the user's request),
     # never by the model. Left out of the model's tool list, still validated and logged.
     injected: bool = False
+    # Private: the audit log keeps only its length (typed text can be a password).
+    private: bool = False
 
     def __post_init__(self) -> None:
         if self.type not in _PY_TYPES:
@@ -201,6 +203,18 @@ class ActionRegistry:
         return out
 
 
+def _request_param(purpose: str) -> Param:
+    # No max_length: it is our own copy of the user's text, and a long request must
+    # never make a call fail.
+    return Param("request", "string", f"The user's latest message, {purpose}", required=False, injected=True)
+
+
+_CLOUD = Param(
+    "cloud", "boolean", "The selected model runs in the cloud (private pages need the user's OK)",
+    required=False, injected=True,
+)
+
+
 def build_default_registry() -> ActionRegistry:
     """Step 1 of the build order: safe actions only. Add click/type later."""
     return ActionRegistry(
@@ -303,10 +317,11 @@ def build_default_registry() -> ActionRegistry:
             ActionSpec(
                 name="web_open",
                 description=(
-                    "Open an http or https URL in the user's default browser. Use when the "
-                    "user wants to go to a site, open GitHub/YouTube/a link, or play something "
-                    "via a web page. Build a sensible https URL. For answering questions with "
-                    "facts, prefer web_search instead. Waits up to 10 s for the page's window."
+                    "Open an http or https URL in a new tab of the agent's own browser (the user's "
+                    "default browser with the agent's own profile). Use when the user wants to go to "
+                    "a site, open GitHub/YouTube/a link, or play something via a web page. Build a "
+                    "sensible https URL. For answering questions with facts, prefer web_search "
+                    "instead. Waits for the page to load."
                 ),
                 risk=Risk.MEDIUM,
                 params=(
@@ -316,12 +331,12 @@ def build_default_registry() -> ActionRegistry:
             ActionSpec(
                 name="list_elements",
                 description=(
-                    "List the clickable elements visible on screen (buttons, icons, menu items, "
-                    "tabs, links, text boxes) as numbered lines with name and rough position. "
-                    "Elements whose names match the user's request come first. "
-                    "area: active = the window in front (default), taskbar, desktop "
-                    "(desktop icons), all (grouped under [window] headers). "
-                    "Call this before move_mouse."
+                    "List the clickable elements on screen (buttons, icons, menu items, tabs, links, "
+                    "text boxes) as numbered lines with name and rough position. Elements whose "
+                    "names match the user's request come first. area: active = the window in front "
+                    "(default; a web page in front is listed from the page itself), taskbar, desktop "
+                    "(desktop icons), all (grouped under [window] headers), page = the web page in "
+                    "the agent's browser. Call this before move_mouse, click or type_text."
                 ),
                 risk=Risk.LOW,
                 params=(
@@ -330,24 +345,41 @@ def build_default_registry() -> ActionRegistry:
                         "string",
                         "Which part of the screen to list (default active)",
                         required=False,
-                        enum=("active", "taskbar", "desktop", "all"),
+                        enum=("active", "taskbar", "desktop", "all", "page"),
                     ),
-                    # No max_length: it is our own copy of the user's text, and a long
-                    # request must never make the list fail.
-                    Param(
-                        "request",
-                        "string",
-                        "The user's request, used to put matching elements first",
-                        required=False,
-                        injected=True,
-                    ),
+                    _request_param("used to put matching elements first"),
+                    _CLOUD,
+                ),
+            ),
+            ActionSpec(
+                name="browser_read",
+                description=(
+                    "Read the text of the web page in the agent's browser (the page in front, or "
+                    "its current tab). Long pages come in parts. Use find to get only the text "
+                    "around a word or phrase."
+                ),
+                risk=Risk.LOW,
+                params=(
+                    Param("find", "string", "Word or phrase to look for (optional)", required=False, max_length=100),
+                    Param("part", "integer", "Which part of a long page (default 1)", required=False, minimum=1, maximum=50),
+                    _request_param("used to see whether they agreed to a cloud warning"),
+                    _CLOUD,
+                ),
+            ),
+            ActionSpec(
+                name="browser_go",
+                description="Go back, go forward or reload the current page in the agent's browser.",
+                risk=Risk.MEDIUM,
+                params=(
+                    Param("action", "string", "What to do", enum=("back", "forward", "reload")),
                 ),
             ),
             ActionSpec(
                 name="list_windows",
                 description=(
                     "List the open windows (title, program, minimized/maximized) as numbered lines, "
-                    "front first. Use it when you need a window's number for window_control."
+                    "front first, with the agent browser's tabs under its window. Use it when you "
+                    "need a window's or tab's number for window_control."
                 ),
                 risk=Risk.LOW,
             ),
@@ -355,22 +387,24 @@ def build_default_registry() -> ActionRegistry:
                 name="window_control",
                 description=(
                     "Focus (bring to front), minimize, maximize, restore or close an open window, "
-                    "by name (title or program, e.g. spotify) or by number from list_windows. "
-                    "If several or no windows match, nothing changes and you get numbered windows "
-                    "to choose from. close works like the window's X button."
+                    "or switch to (focus) or close a tab of the agent's browser, by name (title, "
+                    "program or site, e.g. spotify, youtube) or by number from list_windows. If "
+                    "several or none match, nothing changes and you get numbered entries to choose "
+                    "from. close works like the X button."
                 ),
                 risk=Risk.MEDIUM,
                 params=(
                     Param("action", "string", "What to do", enum=("focus", "minimize", "maximize", "restore", "close")),
-                    Param("name", "string", "Window title or program name; pass this or number", required=False, max_length=100),
-                    Param("number", "integer", "Window number from the latest list; pass this or name", required=False, minimum=1),
+                    Param("name", "string", "Window or tab title, program or site; pass this or number", required=False, max_length=100),
+                    Param("number", "integer", "Window or tab number from the latest list; pass this or name", required=False, minimum=1),
                 ),
             ),
             ActionSpec(
                 name="move_mouse",
                 description=(
                     "Move the mouse pointer onto one element from the latest list_elements "
-                    "result, by its number. It does not click."
+                    "result, by its number. On a web page it scrolls to the element and outlines "
+                    "it instead. It does not click."
                 ),
                 risk=Risk.MEDIUM,
                 params=(
@@ -380,9 +414,9 @@ def build_default_registry() -> ActionRegistry:
             ActionSpec(
                 name="click",
                 description=(
-                    "Click one element from the latest list_elements result, by its number. "
-                    "Only click what the user asked for. After a click the list is cleared: "
-                    "call list_elements again before any further mouse action."
+                    "Click one element from the latest list_elements result, by its number (on a "
+                    "web page it clicks inside the page). Only click what the user asked for. After "
+                    "a click the list is cleared: call list_elements again before any further mouse action."
                 ),
                 risk=Risk.MEDIUM,
                 params=(
@@ -400,19 +434,26 @@ def build_default_registry() -> ActionRegistry:
                         "Double-click instead of a single click, e.g. to open a desktop icon (default false)",
                         required=False,
                     ),
+                    _request_param("used to see whether they answered a cookie question"),
                 ),
             ),
             ActionSpec(
                 name="type_text",
                 description=(
-                    "Click into an input field (Edit, ComboBox or Document element) from the "
-                    "latest list_elements result and paste text into it. It never presses Enter "
-                    "and never types into password fields."
+                    "Enter text into an input field (Edit, SearchBox, ComboBox or Document element) "
+                    "from the latest list_elements result. It never types into password fields and "
+                    "presses Enter only with submit=true, which works only in web search fields."
                 ),
                 risk=Risk.MEDIUM,
                 params=(
                     Param("element", "integer", "Input field number from the latest list_elements result", minimum=1),
-                    Param("text", "string", "The text to enter", max_length=2000),
+                    Param("text", "string", "The text to enter", max_length=2000, private=True),
+                    Param(
+                        "submit",
+                        "boolean",
+                        "Press Enter afterwards to run a search (web search fields only; default false)",
+                        required=False,
+                    ),
                 ),
             ),
             ActionSpec(

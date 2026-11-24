@@ -169,7 +169,7 @@ def leaked_tool_calls(text: str, registry: Any) -> list[dict[str, Any]]:
 
 
 # Actions that can change what is on screen; mid-task vision refresh only after these.
-_UI_CHANGING = frozenset({"wait", "open_app", "web_open", "click", "window_control"})
+_UI_CHANGING = frozenset({"wait", "open_app", "web_open", "click", "window_control", "browser_go"})
 
 # Large tool results that go stale: only the newest copy stays in the chat history.
 _SUPERSEDED = {
@@ -184,14 +184,18 @@ _SUPERSEDED = {
 # Follow-up steps the orchestrator runs itself after a plan succeeds, so the model
 # does not spend a whole round asking for them. Keyed by the last UI-changing action.
 # Not open_app/web_open: "open X" is often the whole task, so a list would be wasted.
+# A click or typing on a web page (its result names the "page") lists that page instead
+# of the window in front: the agent's browser may be behind another window.
 _LIST_ACTIVE = {"name": "list_elements", "arguments": {"area": "active"}}
+_LIST_PAGE = {"name": "list_elements", "arguments": {"area": "page"}}
 _FOLLOW_UPS: dict[str, tuple[dict[str, Any], ...]] = {
     "click": (_LIST_ACTIVE,),
     "type_text": (_LIST_ACTIVE,),
+    "browser_go": (_LIST_PAGE,),
 }
 
 # Actions after which an earlier element list no longer matches the screen.
-_STALES_ELEMENTS = frozenset({"open_app", "web_open", "click", "type_text", "window_control"})
+_STALES_ELEMENTS = frozenset({"open_app", "web_open", "click", "type_text", "window_control", "browser_go"})
 
 # When the chat fills this share of the context window, restart it with a handoff note.
 HANDOFF_AT = 0.85
@@ -302,7 +306,9 @@ def _capture_b64(executor: Executor, emit: EventFn) -> str | None:
         return None
 
 
-def follow_up_plan(plan: list[dict[str, Any]], registry: Any) -> list[dict[str, Any]]:
+def follow_up_plan(
+    plan: list[dict[str, Any]], registry: Any, results: list[StepResult] | None = None
+) -> list[dict[str, Any]]:
     """Steps to run automatically after `plan` succeeded, or [] when none are needed."""
     names = [str(step.get("name")) for step in plan]
     last = max((i for i, n in enumerate(names) if n in _FOLLOW_UPS), default=None)
@@ -310,11 +316,25 @@ def follow_up_plan(plan: list[dict[str, Any]], registry: Any) -> list[dict[str, 
         return []
     if "list_elements" in names[last + 1 :]:
         return []  # the model already listed the elements after the change
+    steps = _FOLLOW_UPS[names[last]]
+    if _acted_on_page(results, last):
+        steps = (_LIST_PAGE,)
     return [
         {"name": s["name"], "arguments": dict(s["arguments"])}
-        for s in _FOLLOW_UPS[names[last]]
+        for s in steps
         if s["name"] in registry
     ]
+
+
+def _acted_on_page(results: list[StepResult] | None, index: int) -> bool:
+    """Did step `index` act on a web page? (page results name the "page", desktop ones the "window")"""
+    result = next((r for r in results or [] if r.index == index), None)
+    return result is not None and isinstance(result.output, dict) and "page" in result.output
+
+
+def uses_cloud(client: Any) -> bool:
+    """Does the active model run in the cloud? (CoreRouter says; a plain ChatClient is local)"""
+    return str(getattr(client, "provider", "local") or "local") != "local"
 
 
 def _execute(executor: Executor, state: TaskState, plan: list[dict[str, Any]]) -> list[StepResult]:
@@ -323,7 +343,7 @@ def _execute(executor: Executor, state: TaskState, plan: list[dict[str, Any]]) -
     The caller keeps the model's own plan for the chat history and the handoff note, so
     the request text is not repeated there; the executor still validates and logs it.
     """
-    return executor.run(executor.registry.inject(plan, {"request": state.user_text}))
+    return executor.run(executor.registry.inject(plan, {"request": state.user_text, "cloud": state.cloud}))
 
 
 def _clip(value: Any, limit: int = 80) -> str:
@@ -471,10 +491,11 @@ def _run_follow_ups(
     state: TaskState,
     plan: list[dict[str, Any]],
     emit: EventFn,
+    results: list[StepResult] | None = None,
 ) -> bool:
     """Run the automatic follow-up steps. True when a fresh element list was added."""
     add_calls = getattr(client, "add_auto_tool_calls", None)
-    steps = follow_up_plan(plan, executor.registry) if callable(add_calls) else []
+    steps = follow_up_plan(plan, executor.registry, results) if callable(add_calls) else []
     if not steps:
         return False
     # Recorded as tool calls of the model's last turn, so each result answers a call.
@@ -617,7 +638,7 @@ def _run_round(
         listed = (
             auto_follow_up
             and not stop_requested()
-            and _run_follow_ups(client, executor, state, plan, emit)
+            and _run_follow_ups(client, executor, state, plan, emit, results)
         )
         # Mid-task refresh only while this task is already using vision, the plan did
         # not just capture, a UI-changing action ran, and no fresh element list came.
@@ -657,6 +678,7 @@ def run_task(
 
     for round_no in range(1, max_rounds + 1):
         state.round_no = round_no
+        state.cloud = uses_cloud(client)  # can change mid-task (fallback to the local model)
         if stop_requested():
             return _stopped(client, round_no - 1)
         if _needs_handoff(client, state, handoff_at):
