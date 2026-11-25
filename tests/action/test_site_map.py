@@ -139,7 +139,7 @@ class TestRanking(Case):
         hits = sm.rank(site, "settings", fake_embed(["settings"])[0])
         self.assertEqual(sum(site.items[h.index].label == "Beállítások" for h in hits), 1)
         self.assertEqual(site.items[hits[0].index].kind, "MenuItem")
-        self.assertLessEqual(len(hits), 3)
+        self.assertLessEqual(len(hits), sm.TOP_HITS_LOCAL)
 
     def test_the_right_place_wins_between_equal_names(self):
         pages = [CrawledPage("https://x.com/", "Home"), CrawledPage("https://x.com/s", "Settings", "Settings")]
@@ -152,6 +152,14 @@ class TestRanking(Case):
         hits = sm.rank(site, "notification settings", query)
         self.assertEqual(site.items[hits[0].index].kind, "Hyperlink")
         self.assertEqual(len(hits), 1)  # one line per name
+
+    def test_menu_and_navigation_entries_get_a_small_bonus(self):
+        pages = [CrawledPage("https://x.com/", "Home")]
+        items = [CrawledItem("Alpha", "Button", 0, "main"), CrawledItem("Beta", "Hyperlink", 0, "nav")]
+        same = embeddings.normalize([1, 0, 0])
+        site = sm.SiteMap("x.com", "https://x.com/", "now", pages, items, vectors=[same, same])
+        hits = sm.rank(site, "gamma", embeddings.normalize([1, 0, 0]))
+        self.assertEqual([site.items[h.index].label for h in hits], ["Beta", "Alpha"])
 
     def test_exact_name_first(self):
         site = self.make_map()
@@ -251,7 +259,7 @@ class TestFindShowOutline(Case):
         result, shown = sm.run("find", find="settings")
         self.assertEqual(shown.id, 57)
         self.assertIn("element 57", result["note"])
-        self.assertIn("number 2 or 3", result["note"])
+        self.assertIn("its number (2)", result["note"])
         self.assertEqual(result["matches"].splitlines()[0], '1: MenuItem "Beállítások" in menu "Fiók menüje" on page "YouTube"')
 
     def test_find_on_a_site_without_a_map(self):
@@ -382,12 +390,15 @@ class FakeLoc:
         self.page.menu_open = True
 
     def evaluate(self, js, arg=None):
+        if js == pc.RISK_JS:
+            return self.page.risky.get(self.ref, "")
         self.page.log.append(("outline", self.ref, arg))
 
 
 class FakePage:
     def __init__(self, url):
         self.url, self.menu_open, self.log = url, False, []
+        self.risky = {}
 
     def is_closed(self):
         return False
@@ -477,3 +488,38 @@ class TestShowItem(unittest.TestCase):
         self.assertIsNone(el)
         self.assertFalse(result["shown"])
         self.assertEqual(result["menu_not_found"], "Missing menu")
+
+
+class TestHowManyMatches(Case):
+    def setUp(self):
+        super().setUp()
+        pages = [CrawledPage("https://www.youtube.com/", "YouTube")]
+        items = [CrawledItem(f"Section {i}", "Hyperlink", 0, "nav", url=f"https://www.youtube.com/s{i}") for i in range(10)]
+        site, _ = sm.build_map(CrawlResult("youtube.com", "https://www.youtube.com/", pages, items))
+        sm.save_map(site)
+
+    def lines(self, cloud):
+        result, _ = sm.run("find", find="section", cloud=cloud)
+        return result["matches"].splitlines()
+
+    def test_a_local_model_gets_five_and_a_cloud_model_eight(self):
+        self.assertEqual(len(self.lines(cloud=False)), 5)
+        self.assertEqual(len(self.lines(cloud=True)), 8)
+
+    def test_any_returned_match_can_be_shown(self):
+        sm.run("find", find="section", cloud=True)
+        result, _ = sm.run("show", number=8, cloud=True)
+        self.assertTrue(result["match"].startswith("8: "))
+        with self.assertRaisesRegex(ValueError, "between 1 and 8"):
+            sm.run("show", number=9, cloud=True)
+
+    def test_the_note_asks_the_model_to_pick_by_its_own_reading(self):
+        result, _ = sm.run("find", find="section", cloud=True)
+        self.assertIn("(2 to 8)", result["note"])
+        self.assertIn("site's language", result["note"])
+
+    def test_the_tool_accepts_up_to_eight(self):
+        from desktop_ai_agent.action.registry import build_default_registry
+
+        spec = build_default_registry().get("site_map")
+        self.assertEqual(spec.validate({"action": "show", "number": 8})["number"], 8)

@@ -520,6 +520,7 @@ class TestWebPages(Case):
         super().setUp()
         self.kind = None  # what _browser_kind says about the window in front
         self.page_calls = []
+        self.code_checks = []  # check_code of each page click
         self.handover_ok = True
 
         def list_page(request, cloud, handover_hwnd, strict):
@@ -531,8 +532,9 @@ class TestWebPages(Case):
         patches = [
             mock.patch.object(ui_control, "_browser_kind", side_effect=lambda hwnd: self.kind),
             mock.patch.object(ui_control, "_list_page", side_effect=list_page),
-            mock.patch.object(page_control, "click", side_effect=lambda el, button, double: (
-                self.page_calls.append(("click", el.ref, button, double)) or {"clicked": el.name, "page": "YouTube"})),
+            mock.patch.object(page_control, "click", side_effect=lambda el, button, double, check_code=True: (
+                self.code_checks.append(check_code)
+                or self.page_calls.append(("click", el.ref, button, double)) or {"clicked": el.name, "page": "YouTube"})),
             mock.patch.object(page_control, "type_into", side_effect=lambda el, text, submit: (
                 self.page_calls.append(("type", el.ref, text, submit)) or {"typed_into": el.name, "page": "YouTube"})),
             mock.patch.object(page_control, "highlight", side_effect=lambda el: (
@@ -552,6 +554,11 @@ class TestWebPages(Case):
     def test_area_page_works_whatever_is_in_front(self):
         result = ui_control.list_elements("page")
         self.assertEqual(result["area"], "page")
+
+    def test_page_clicks_check_the_page_code_except_answered_cookie_buttons(self):
+        ui_control.list_elements("page")
+        ui_control.click(1)
+        self.assertEqual(self.code_checks, [True])
 
     def test_users_browser_is_handed_over(self):
         self.kind = "user"
@@ -617,3 +624,12 @@ class TestWebPages(Case):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRiskyNamesOnWebPages(unittest.TestCase):
+    def test_a_comment_placeholder_only_opens_the_box(self):
+        self.assertIsNone(ui_control.risky_word("Add a comment\u2026", web=True))
+        self.assertIsNone(ui_control.risky_word("Add a comment...", web=True))
+        self.assertEqual(ui_control.risky_word("Add a comment\u2026"), "comment")  # desktop: unchanged
+        self.assertEqual(ui_control.risky_word("Comment", web=True), "Comment")
+        self.assertEqual(ui_control.risky_word("Delete comment...", web=True), "Delete")

@@ -78,7 +78,7 @@ class OllamaService:
     def ensure_model(self, name: str, log: LogFn | None = None) -> None:
         emit = log or (lambda _m: None)
         if self.has_model(name):
-            emit(f"Base model '{name}' found.")
+            emit(f"Model '{name}' found.")
             return
         self.pull_model(name, log=emit)
 

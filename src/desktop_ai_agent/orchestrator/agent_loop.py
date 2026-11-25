@@ -170,7 +170,9 @@ def leaked_tool_calls(text: str, registry: Any) -> list[dict[str, Any]]:
 
 
 # Actions that can change what is on screen; mid-task vision refresh only after these.
-_UI_CHANGING = frozenset({"wait", "open_app", "web_open", "click", "window_control", "browser_go", "site_map"})
+_UI_CHANGING = frozenset({
+    "wait", "open_app", "web_open", "click", "window_control", "browser_go", "site_map", "scroll",
+})
 
 # Large tool results that go stale: only the newest copy stays in the chat history.
 _SUPERSEDED = {
@@ -193,11 +195,12 @@ _FOLLOW_UPS: dict[str, tuple[dict[str, Any], ...]] = {
     "click": (_LIST_ACTIVE,),
     "type_text": (_LIST_ACTIVE,),
     "browser_go": (_LIST_PAGE,),
+    "scroll": (_LIST_PAGE,),
 }
 
 # Actions after which an earlier element list no longer matches the screen.
 _STALES_ELEMENTS = frozenset({
-    "open_app", "web_open", "click", "type_text", "window_control", "browser_go", "site_map",
+    "open_app", "web_open", "click", "type_text", "window_control", "browser_go", "site_map", "scroll",
 })
 
 # When the chat fills this share of the context window, restart it with a handoff note.

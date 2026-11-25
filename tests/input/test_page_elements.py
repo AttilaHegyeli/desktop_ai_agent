@@ -136,3 +136,32 @@ class TestText(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEditableAndFocusable(unittest.TestCase):
+    SNAP = "\n".join([
+        "- generic [ref=e2] [box=8,8,600,18]: Add a comment\u2026",
+        '- generic "Add a comment\u2026" [ref=e4] [box=8,26,600,18]',
+        "- generic [ref=e5] [box=8,50,600,18]",
+        "- generic [ref=e6] [box=8,80,600,200]: " + "A whole panel of text " * 5,
+    ])
+
+    def test_marked_nodes_become_fields_and_clickables(self):
+        nodes = pe.parse_snapshot(self.SNAP)
+        found = pe.page_elements(nodes, editable_refs=frozenset({"e4", "e5"}), focusable_refs=frozenset({"e2", "e6"}))
+        by_ref = {el.ref: el for el in found}
+        self.assertEqual((by_ref["e2"].type, by_ref["e2"].name), ("Clickable", "Add a comment\u2026"))
+        self.assertEqual((by_ref["e4"].type, by_ref["e4"].name), ("Edit", "Add a comment\u2026"))
+        self.assertEqual(by_ref["e5"].name, "Text box")  # empty and unnamed
+        self.assertNotIn("e6", by_ref)  # a focusable panel is not a button
+
+    def test_unmarked_nodes_stay_out(self):
+        self.assertEqual(pe.page_elements(pe.parse_snapshot(self.SNAP)), [])
+
+
+class TestFieldNames(unittest.TestCase):
+    def test_an_unnamed_textbox_takes_the_text_the_page_script_read(self):
+        nodes = pe.parse_snapshot("- textbox [ref=e535] [box=52,567,105,17]")
+        self.assertEqual(pe.page_elements(nodes), [])  # nothing to call it by
+        found = pe.page_elements(nodes, field_names={"e535": "Add a comment..."})
+        self.assertEqual((found[0].type, found[0].name), ("Edit", "Add a comment..."))

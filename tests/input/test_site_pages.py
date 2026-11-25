@@ -5,13 +5,21 @@ from desktop_ai_agent.input.page_elements import parse_snapshot
 from desktop_ai_agent.input.site_pages import (
     PageItem,
     content_patterns,
+    clean_title,
+    drop_repeated_rows,
+    fact_for,
+    facts_by_box,
+    inside_app,
     is_content,
     is_content_url,
+    marked_refs,
     page_items,
     page_key,
     same_site,
+    shell_names,
     site_host,
     why_not_follow,
+    with_facts,
 )
 
 BASE = "https://www.example.com/start"
@@ -113,3 +121,125 @@ class TestAddresses(unittest.TestCase):
         self.assertTrue(all(is_content(it, patterns) for it in repos))
         self.assertFalse(any(is_content(it, patterns) for it in menu))
         self.assertFalse(is_content(PageItem("Save", "Button", "x"), patterns))
+
+
+class TestFactsAndGroups(unittest.TestCase):
+    def test_items_keep_their_box_and_link_group(self):
+        snap = "\n".join([
+            "- navigation [ref=e1] [box=0,0,100,100]:",
+            "  - list [ref=e2] [box=0,0,100,60]:",
+            '    - link "A" [ref=e3] [box=0,0,10,10]:',
+            "      - /url: /a",
+            '    - link "B" [ref=e4] [box=0,20,10,10]:',
+            "      - /url: /b",
+            '    - link "C" [ref=e5] [box=0,40,10,10]:',
+            "      - /url: /c",
+            '  - link "D" [ref=e6] [box=0,80,10,10]:',
+            "    - /url: /d",
+        ])
+        nodes = parse_snapshot(snap)
+        items = {it.label: it for it in page_items(nodes, BASE)}
+        self.assertEqual(items["A"].box, (0, 0, 10, 10))
+        self.assertEqual(items["A"].group, items["C"].group)  # the list
+        self.assertNotEqual(items["A"].group, items["D"].group)  # the navigation around it
+
+    def test_facts_by_box_merge_and_near_match(self):
+        facts = facts_by_box([
+            [10, 20, 30, 40, "", True, False],
+            [10, 20, 30, 40, "https://a.com/x", False, False],
+            [0, 0, 5, 5, "javascript:void(0)", False, True],
+            ["bad"],
+        ])
+        self.assertEqual(facts[(10, 20, 30, 40)].href, "https://a.com/x")
+        self.assertTrue(facts[(10, 20, 30, 40)].popup)
+        self.assertEqual(facts[(0, 0, 5, 5)].href, "")  # not a web address
+        self.assertIs(fact_for((11, 20, 30, 41), facts), facts[(10, 20, 30, 40)])
+        self.assertIsNone(fact_for((50, 50, 5, 5), facts))
+        self.assertIsNone(fact_for(None, facts))
+
+    def test_with_facts_fills_links_and_menus_but_not_form_controls(self):
+        facts = facts_by_box([[0, 0, 10, 10, "https://a.com/help", True, False],
+                              [0, 20, 10, 10, "https://a.com/card", False, False]])
+        items = [PageItem("Help", "MenuItem", "e1", box=(0, 0, 10, 10)),
+                 PageItem("Dark theme", "CheckBox", "e2", box=(0, 20, 10, 10))]
+        done = with_facts(items, facts)
+        self.assertEqual((done[0].url, done[0].popup), ("https://a.com/help", True))
+        self.assertEqual(done[1].url, "")
+
+    def test_tracking_and_language_parameters_do_not_make_another_page(self):
+        self.assertEqual(page_key("https://a.com/x?utm_source=yt&utm_campaign=c"), page_key("https://a.com/x"))
+        self.assertEqual(page_key("https://a.com/x?hl=hu&tab=2"), page_key("https://a.com/x?tab=2"))
+
+
+class TestInsideTheApp(unittest.TestCase):
+    def shell(self, *labels, area="nav"):
+        return shell_names([PageItem(label, "Hyperlink", f"e{i}", area=area) for i, label in enumerate(labels)])
+
+    def test_shell_is_header_and_sidebar_names_only(self):
+        items = [PageItem("Home", "Hyperlink", "e1", area="nav"), PageItem("Video", "Hyperlink", "e2", area="main"),
+                 PageItem("Title", "Heading", "e3", area="nav")]
+        self.assertEqual(shell_names(items), frozenset({"home"}))
+
+    def test_a_page_with_the_same_header_is_inside(self):
+        app = self.shell("Home", "Shorts", "Subscriptions", "You", "History", "Account menu", "Search", "Create")
+        self.assertTrue(inside_app(self.shell("Home", "Shorts", "Subscriptions", "You", "Account menu"), app))
+        self.assertFalse(inside_app(self.shell("Legal home", "Policies", "Contact", "Home"), app))
+
+    def test_tiny_start_pages_let_everything_in(self):
+        self.assertTrue(inside_app(frozenset(), self.shell("Home", "About")))
+
+
+class TestMarkedRefs(unittest.TestCase):
+    def test_editable_and_focusable_by_box(self):
+        nodes = parse_snapshot("\n".join([
+            "- generic [ref=e1] [box=0,0,100,20]: Add a comment",
+            '- generic "Write" [ref=e2] [box=0,30,100,20]',
+            "- generic [ref=e3] [box=0,60,100,20]",
+        ]))
+        facts = facts_by_box([[0, 0, 100, 20, "", False, False, True], [0, 30, 100, 20, "", False, True, False],
+                              [0, 60, 100, 20, "", False, False]])  # an old 7-field row still reads
+        marks = marked_refs(nodes, facts)
+        self.assertEqual((marks.editable, marks.focusable, marks.points), (frozenset({"e2"}), frozenset({"e1"}), {}))
+
+    def test_an_inline_placeholder_marks_its_line_with_the_point_to_click(self):
+        nodes = parse_snapshot('- generic [ref=e12] [box=8,110,1264,18]: Add a comment')
+        marks = marked_refs(nodes, facts_by_box([[8, 110, 130, 17, "", False, False, True]]))
+        self.assertEqual(marks.focusable, frozenset({"e12"}))
+        self.assertEqual(marks.points, {"e12": (65, 8)})
+
+    def test_a_huge_container_does_not_stand_for_a_tiny_element(self):
+        nodes = parse_snapshot('- generic [ref=e1] [box=0,0,1280,900]: everything')
+        self.assertEqual(marked_refs(nodes, facts_by_box([[10, 10, 5, 5, "", False, False, True]])).focusable, frozenset())
+
+
+class TestFieldText(unittest.TestCase):
+    def test_marks_carry_the_text_of_unnamed_fields_only(self):
+        nodes = parse_snapshot("\n".join([
+            "- textbox [ref=e1] [box=52,567,105,17]",
+            '- textbox "Search" [ref=e2] [box=0,0,100,20]',
+        ]))
+        facts = facts_by_box([[52, 567, 105, 17, "", False, False, False, "Add a comment..."],
+                              [0, 0, 100, 20, "", False, False, False, "Search"]])
+        self.assertEqual(marked_refs(nodes, facts).names, {"e1": "Add a comment..."})
+
+
+class TestRepeatedRowsAndTitles(unittest.TestCase):
+    def test_a_feed_of_look_alike_buttons_becomes_one(self):
+        rows = [PageItem(f"Subscribe to channel: Name {i}", "Button", f"e{i}", area="main") for i in range(5)]
+        rows += [PageItem(f"Go to the channel: Name {i}", "Hyperlink", f"g{i}", area="main") for i in range(3)]
+        keep = [PageItem("Settings", "Hyperlink", "s", area="nav"),
+                PageItem("Subscribe to this site now", "Button", "x", area="main")]
+        labels = [it.label for it in drop_repeated_rows(rows + keep)]
+        self.assertEqual(sum(l.startswith("Subscribe to channel") for l in labels), 1)
+        self.assertEqual(sum(l.startswith("Go to the channel") for l in labels), 3)  # under 4: kept
+        self.assertIn("Settings", labels)
+        self.assertIn("Subscribe to this site now", labels)
+
+    def test_menus_are_left_alone(self):
+        rows = [PageItem(f"Switch to account number {i}", "MenuItem", f"e{i}", area="menu") for i in range(6)]
+        self.assertEqual(len(drop_repeated_rows(rows)), 6)
+
+    def test_the_unread_count_is_not_part_of_a_title(self):
+        self.assertEqual(clean_title("(2769) YouTube"), "YouTube")
+        self.assertEqual(clean_title("(3) Inbox (5) - Mail"), "Inbox (5) - Mail")
+        self.assertEqual(clean_title("YouTube"), "YouTube")

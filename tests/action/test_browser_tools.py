@@ -21,6 +21,13 @@ class TestRegistry(unittest.TestCase):
         self.assertEqual(reg.get("browser_go").risk.value, "medium")
         self.assertEqual(tool("browser_go")["parameters"]["properties"]["action"]["enum"], ["back", "forward", "reload"])
 
+    def test_scroll_tool(self):
+        reg = build_default_registry()
+        self.assertEqual(reg.get("scroll").risk.value, "low")
+        self.assertEqual(tool("scroll")["parameters"]["properties"]["direction"]["enum"], ["down", "up"])
+        (r,) = default_executor().run([{"name": "scroll", "arguments": {"direction": "sideways"}}])
+        self.assertEqual(r.status, "rejected")
+
     def test_injected_values_are_hidden_from_the_model(self):
         for name in ("list_elements", "browser_read", "click"):
             with self.subTest(name=name):
@@ -52,6 +59,13 @@ class TestHandlers(unittest.TestCase):
             out = handlers.browser_read({"find": "delete", "request": "find delete", "cloud": True})
         read.assert_called_once_with("delete", 1, "find delete", True, 600)
         self.assertEqual(out, {"text": "hi"})
+
+    def test_scroll_hands_over_and_clears_the_element_list(self):
+        with mock.patch.object(ui_control, "user_browser_in_front", return_value=600),                 mock.patch.object(page_control, "scroll", return_value={"scrolled": "down"}) as scroll,                 mock.patch.object(ui_control, "clear_list_after_action") as clear:
+            out = handlers.scroll({"direction": "down"})
+        scroll.assert_called_once_with("down", 600)
+        clear.assert_called_once_with("scroll")
+        self.assertEqual(out, {"scrolled": "down"})
 
     def test_browser_go_clears_the_element_list(self):
         with mock.patch.object(page_control, "go", return_value={"action": "back"}) as go, \

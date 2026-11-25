@@ -85,6 +85,13 @@ def browser_go(args: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def scroll(args: dict[str, Any]) -> dict[str, Any]:
+    """Scroll the agent's page down or up by about one screen."""
+    result = _page_control.scroll(args["direction"], _ui_control.user_browser_in_front())
+    _ui_control.clear_list_after_action("scroll")  # the list that follows brings the new view
+    return result
+
+
 def site_map(args: dict[str, Any]) -> dict[str, Any]:
     """Map a site, find where something is on it (shown on the page), or outline it."""
     result, shown = _site_map.run(
@@ -249,6 +256,7 @@ HANDLERS = {
     "list_elements": list_elements,
     "browser_read": browser_read,
     "browser_go": browser_go,
+    "scroll": scroll,
     "site_map": site_map,
     "list_windows": list_windows,
     "window_control": window_control,

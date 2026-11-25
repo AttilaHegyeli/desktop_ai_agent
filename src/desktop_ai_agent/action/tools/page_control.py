@@ -6,6 +6,7 @@ the web cases here:
   click / type_text / move_mouse    -> act on those numbers inside the page (no real mouse)
   browser_read                      -> the page's text, in parts, or around a word
   browser_go                        -> back / forward / reload
+  scroll                            -> down / up by about one screen (loads lazy content)
   list_windows / window_control     -> also list, switch to and close the agent's tabs
   site_map (find / show)            -> show_item: open a mapped item's page (and menu), outline it
 
@@ -45,6 +46,7 @@ from desktop_ai_agent.action.tools import browser_session
 from desktop_ai_agent.action.tools.web_open import check_url
 from desktop_ai_agent.input.element_ranking import fold, scores
 from desktop_ai_agent.input.page_elements import (
+    TEXT_TYPES,
     PageElement,
     clean_name,
     find_snippets,
@@ -54,7 +56,7 @@ from desktop_ai_agent.input.page_elements import (
     short,
     split_parts,
 )
-from desktop_ai_agent.input.site_pages import HEADING_KIND
+from desktop_ai_agent.input.site_pages import ELEMENT_FACTS_JS, HEADING_KIND, facts_by_box, marked_refs
 
 MAX_LISTED = 60
 PART_CHARS = 1500  # about 375 tokens per browser_read part
@@ -68,6 +70,9 @@ HIGHLIGHT_MS = 3000
 SHOW_MS = 6000  # site map: long enough to find the outline on the page
 MENU_OPEN_MS = 700
 GO_ACTIONS = ("back", "forward", "reload")
+SCROLL_DIRECTIONS = ("down", "up")
+SCROLL_SCREEN = 0.8  # share of a screen one scroll moves (a bit of the old view stays visible)
+SCROLL_WAIT_MS = 1000  # lazy content (YouTube's comments, feeds) loads while the page scrolls
 
 PRIVATE_HOSTS = ("mail.google.com", "classroom.google.com", "docs.google.com", "drive.google.com")
 # Window programs that are web browsers (the user's own ones get handed over).
@@ -298,6 +303,72 @@ def _settle(page: Any) -> None:
             pass
 
 
+def _facts(page: Any) -> list[Any]:
+    """ELEMENT_FACTS_JS rows of the page (editable boxes, placeholders); [] when it fails."""
+    try:
+        rows = page.evaluate(ELEMENT_FACTS_JS)
+    except Exception:  # noqa: BLE001 - the snapshot alone still lists the page
+        return []
+    return rows if isinstance(rows, list) else []
+
+
+def _elements(snapshot: str, height: Any, key: int, rows: list[Any]) -> list[PageElement]:
+    nodes = parse_snapshot(snapshot)
+    marks = marked_refs(nodes, facts_by_box(rows))
+    found = page_elements(nodes, float(height) if height else None, key, marks.editable, marks.focusable, marks.names)
+    return [replace(el, click_at=marks.points[el.ref]) if el.ref in marks.points else el for el in found]
+
+
+def _where(el: PageElement) -> dict[str, Any]:
+    """Click options: the point inside the element when it is not its centre."""
+    return {"position": {"x": el.click_at[0], "y": el.click_at[1]}} if el.click_at else {}
+
+
+# Is this element (or what it sits in, 4 levels up) an action that changes something,
+# going by its page code? Names on the page are in the site's language ("Küldés"), but
+# ids, classes, form actions and link paths are written in English (id="submit-button").
+# Also: a submit button of a form that is not a search, and a Ctrl+Enter shortcut hint
+# (Gmail's send). Returns the word that matched, or ''. Fixed text, no model input.
+RISK_JS = """el => {
+  const risky = new Set(['submit', 'send', 'publish', 'delete', 'remove', 'unsubscribe', 'purchase',
+                         'checkout', 'buy', 'logout', 'signout', 'logoff']);
+  const words = text => String(text || '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z]+/);
+  const leaving = /(sign|log)[-_ ]?(out|off)/i;
+  const shortcut = /(ctrl|cmd|\\u2318)\\s*[-+]?\\s*enter/i;
+  let node = el;
+  for (let depth = 0; node && node.nodeType === 1 && depth < 4; depth++, node = node.parentElement) {
+    const path = node.tagName === 'A' ? (node.getAttribute('href') || '').split(/[?#]/)[0] : '';
+    for (const value of [node.id, node.getAttribute('name'), node.getAttribute('class'),
+                         node.getAttribute('data-testid'), node.getAttribute('action'),
+                         node.getAttribute('formaction'), path]) {
+      if (leaving.test(value || '')) return 'log out';
+      for (const w of words(value)) if (risky.has(w)) return w;
+    }
+    for (const value of [node.getAttribute('title'), node.getAttribute('data-tooltip'),
+                         node.getAttribute('aria-keyshortcuts'), node.getAttribute('aria-label')]) {
+      if (shortcut.test(value || '')) return 'send (Ctrl+Enter)';
+    }
+  }
+  const form = el.form || el.closest('form');
+  const submits = (el.tagName === 'BUTTON' && (el.getAttribute('type') || 'submit').toLowerCase() === 'submit')
+    || (el.tagName === 'INPUT' && ['submit', 'image'].includes(el.type));
+  if (form && submits) {
+    const hint = [form.getAttribute('role'), form.getAttribute('action'), form.id, form.getAttribute('class')].join(' ');
+    if (!/search|query|results/i.test(hint) && !form.querySelector('input[type=search], [role=searchbox]')) return 'submit';
+  }
+  return '';
+}"""
+
+
+def code_risk(loc: Any) -> str:
+    """The risky word in an element's page code ('' when none, or when it cannot be read)."""
+    try:
+        word = loc.evaluate(RISK_JS)
+    except Exception:  # noqa: BLE001 - gone: the click itself reports that
+        return ""
+    return word if isinstance(word, str) else ""
+
+
 def _act(el: PageElement, action: Callable[[], None]) -> None:
     try:
         action()
@@ -365,11 +436,16 @@ def _number(found: list[PageElement], key: int, url: str) -> tuple[list[PageElem
 
 
 def order_elements(elements: list[PageElement], request: str, new: set[str]) -> list[PageElement]:
-    """New since the last list first, then request matches, then on screen, then page order."""
+    """New since the last list first, then request matches, then on screen (text fields
+    before the rest: a long page's comment box must not be cut off by video links), then
+    page order."""
     totals = scores(request, (el.name for el in elements))
     rank = sorted(
         range(len(elements)),
-        key=lambda i: (elements[i].ref not in new, -totals[i], bool(elements[i].where), i),
+        key=lambda i: (
+            elements[i].ref not in new, -totals[i], bool(elements[i].where),
+            elements[i].type not in TEXT_TYPES, i,
+        ),
     )
     return [elements[i] for i in rank]
 
@@ -390,14 +466,14 @@ def list_page(
         raise HandOverFailed("The browser in front shows no web page.")
     check_cloud(_call(lambda live: _current(live).url), cloud, request)
 
-    def work(live: Any) -> tuple[str, str, int, str, Any]:
+    def work(live: Any) -> tuple[str, str, int, str, Any, Any]:
         page = _current(live)
         snapshot = page.aria_snapshot(mode="ai", boxes=True, timeout=SNAPSHOT_TIMEOUT_MS)
         height = page.evaluate("() => window.innerHeight")
-        return page.title(), page.url, live.key(page), snapshot, height
+        return page.title(), page.url, live.key(page), snapshot, height, _facts(page)
 
-    title, url, key, snapshot, height = _call(work)
-    found = page_elements(parse_snapshot(snapshot), float(height) if height else None, key)
+    title, url, key, snapshot, height, rows = _call(work)
+    found = _elements(snapshot, height, key, rows)
     numbered, new, memory, had_previous = _number(found, key, url)
     changed_by, memory.changed_by = memory.changed_by, ""
     current = frozenset(el.ref for el in numbered)
@@ -477,18 +553,28 @@ def read(
 
 # ---- acting ------------------------------------------------------------------------
 
-def click(el: PageElement, button: str = "left", double: bool = False) -> dict[str, Any]:
+def click(el: PageElement, button: str = "left", double: bool = False, check_code: bool = True) -> dict[str, Any]:
+    """Click a page element. Refused when its page code says it sends, submits, deletes,
+    buys or logs out (whatever the page's language). `check_code` is False only for a
+    cookie button the user already answered about (consent forms submit)."""
+
     def work(live: Any) -> tuple[str, str, bool]:
         page = _page_of(live, el)
         loc = _locate(page, el)
+        word = code_risk(loc) if check_code else ""
+        if word:
+            raise PermissionError(
+                f"'{el.name}' looks risky (its page code says '{word}'). Do not click it: ask the user "
+                "to do this themselves."
+            )
         before = live.pages()
 
         def press() -> None:
             loc.scroll_into_view_if_needed(timeout=ACTION_TIMEOUT_MS)
             if double:
-                loc.dblclick(button=button, timeout=ACTION_TIMEOUT_MS)
+                loc.dblclick(button=button, timeout=ACTION_TIMEOUT_MS, **_where(el))
             else:
-                loc.click(button=button, timeout=ACTION_TIMEOUT_MS)
+                loc.click(button=button, timeout=ACTION_TIMEOUT_MS, **_where(el))
 
         _act(el, press)
         new = live.follow_new(before)
@@ -541,7 +627,7 @@ def type_into(el: PageElement, text: str, submit: bool = False) -> dict[str, Any
             if kind == "input" or (kind == "textarea" and (search or info.get("empty"))):
                 loc.fill(text, timeout=ACTION_TIMEOUT_MS)
             else:
-                loc.click(timeout=ACTION_TIMEOUT_MS)
+                loc.click(timeout=ACTION_TIMEOUT_MS, **_where(el))
                 page.keyboard.press("Control+End")
                 page.keyboard.insert_text(text)
 
@@ -628,7 +714,7 @@ def show_item(url: str, label: str, kind: str, menu: str = "") -> tuple[PageElem
     inside a menu, and outline the item. Returns (its numbered element when it can be
     clicked, result). The number works with click like one from list_elements."""
 
-    def work(live: Any) -> tuple[str, str, int, str, Any, str, str]:
+    def work(live: Any) -> tuple[str, str, int, str, Any, str, str, Any]:
         page = _current(live)
         if not same_address(page.url, url):
             try:
@@ -644,8 +730,9 @@ def show_item(url: str, label: str, kind: str, menu: str = "") -> tuple[PageElem
         ref = _target_ref(nodes, elements, label, kind)
         if menu and not ref:  # the menu is closed (an open one is not clicked: it would close)
             opener = next((el for el in elements if _same_label(el.name, menu)), None)
-            if opener is not None:
-                page.locator(f"aria-ref={opener.ref}").click(timeout=ACTION_TIMEOUT_MS)
+            loc = page.locator(f"aria-ref={opener.ref}") if opener is not None else None
+            if loc is not None and not code_risk(loc):
+                loc.click(timeout=ACTION_TIMEOUT_MS)
                 page.wait_for_timeout(MENU_OPEN_MS)
                 opened = opener.name
                 snapshot = page.aria_snapshot(mode="ai", boxes=True, timeout=SNAPSHOT_TIMEOUT_MS)
@@ -655,11 +742,11 @@ def show_item(url: str, label: str, kind: str, menu: str = "") -> tuple[PageElem
         if ref:
             page.locator(f"aria-ref={ref}").evaluate(_HIGHLIGHT_JS, SHOW_MS)
         page.bring_to_front()
-        return page.title(), page.url, live.key(page), snapshot, height, ref, opened
+        return page.title(), page.url, live.key(page), snapshot, height, ref, opened, _facts(page)
 
-    title, now_url, key, snapshot, height, ref, opened = _call(work)
+    title, now_url, key, snapshot, height, ref, opened, rows = _call(work)
     _front_window()
-    found = page_elements(parse_snapshot(snapshot), float(height) if height else None, key)
+    found = _elements(snapshot, height, key, rows)
     numbered, _new, memory, _had = _number(found, key, now_url)
     memory.last_refs = frozenset(el.ref for el in numbered)
     memory.changed_by = ""
@@ -674,6 +761,43 @@ def show_item(url: str, label: str, kind: str, menu: str = "") -> tuple[PageElem
     else:
         result["shown"] = True  # a heading: outlined, nothing to click
     return target, result
+
+
+_SCROLL_INFO_JS = "() => [window.innerWidth, window.innerHeight, window.scrollY]"
+_SCROLL_Y_JS = "() => window.scrollY"
+
+
+def scroll(direction: str, handover_hwnd: int | None = None) -> dict[str, Any]:
+    """Scroll the current tab down or up by about one screen with the mouse wheel (so a
+    scrolling box under the pointer works too), then give the page a moment to load what
+    the scroll brought into view. The next page list shows what appeared."""
+    if direction not in SCROLL_DIRECTIONS:
+        raise ValueError(f"direction must be one of {list(SCROLL_DIRECTIONS)}, got '{direction}'")
+    note = hand_over(handover_hwnd) if handover_hwnd else None
+
+    def work(live: Any) -> tuple[str, str, int, bool]:
+        page = _current(live)
+        width, height, top = page.evaluate(_SCROLL_INFO_JS)
+        step = int(height * SCROLL_SCREEN) * (1 if direction == "down" else -1)
+        page.mouse.move(width / 2, height / 2)
+        page.mouse.wheel(0, step)
+        page.wait_for_timeout(SCROLL_WAIT_MS)
+        _settle(page)
+        moved = page.evaluate(_SCROLL_Y_JS) != top
+        return page.title(), page.url, live.key(page), moved
+
+    title, url, key, moved = _call(work)
+    _changed(key, "scroll")
+    result: dict[str, Any] = {
+        "scrolled": direction, "page": short(clean_name(title), 80), "site": host_of(url), "moved": moved,
+    }
+    notes = [note] if note else []
+    if not moved:
+        end = "bottom" if direction == "down" else "top"
+        notes.append(f"The page did not move: it is probably already at the {end}.")
+    if notes:
+        result["note"] = " ".join(notes)
+    return result
 
 
 def go(action: str) -> dict[str, Any]:

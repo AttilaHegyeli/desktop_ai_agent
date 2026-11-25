@@ -6,6 +6,7 @@ from unittest import mock
 from desktop_ai_agent.action.tools import browser_session as bs
 from desktop_ai_agent.action.tools import page_control as pc
 from desktop_ai_agent.input.page_elements import PageElement
+from desktop_ai_agent.input.site_pages import ELEMENT_FACTS_JS
 from desktop_ai_agent.input.windows import WindowInfo
 
 PwTimeout = type("TimeoutError", (Exception,), {"__module__": "playwright._impl._errors"})
@@ -16,6 +17,18 @@ SNAP = """- combobox "Search" [ref=e3] [box=300,10,400,30]
 - link "lofi hip hop radio" [ref=e6] [cursor=pointer] [box=10,900,300,40]
 - button "Accept all" [ref=e9] [box=10,500,100,30]
 """
+
+
+class FakeMouse:
+    def __init__(self, page):
+        self.page = page
+
+    def move(self, x, y):
+        self.page.log.append(("mouse_move", x, y))
+
+    def wheel(self, dx, dy):
+        self.page.log.append(("wheel", dx, dy))
+        self.page.scroll_y = max(0, min(self.page.scroll_max, self.page.scroll_y + dy))
 
 
 class FakeKeyboard:
@@ -60,6 +73,8 @@ class FakeLocator:
     def evaluate(self, js, arg=None):
         if js == pc._FIELD_JS:
             return self.page.fields.get(self.ref, {"kind": "input", "empty": True})
+        if js == pc.RISK_JS:
+            return self.page.risky.get(self.ref, "")
         self.page.log.append(("highlight", self.ref, arg))
 
 
@@ -70,6 +85,8 @@ class FakePage:
         self.closed = False
         self.log = []
         self.fields = {}
+        self.risky = {}  # ref -> what its page code says ("submit", ...)
+        self.facts = []  # ELEMENT_FACTS_JS rows
         self.opens_tab = {}
         self.count_raises = False
         self.click_timeout = False
@@ -77,6 +94,8 @@ class FakePage:
         self.back_url = None
         self.leave_prompt = False
         self.keyboard = FakeKeyboard(self.log)
+        self.mouse = FakeMouse(self)
+        self.scroll_y, self.scroll_max = 0, 5000
 
     def is_closed(self):
         return self.closed
@@ -92,6 +111,12 @@ class FakePage:
         return self.snapshot
 
     def evaluate(self, js):
+        if js == ELEMENT_FACTS_JS:
+            return self.facts
+        if js == pc._SCROLL_INFO_JS:
+            return [1280, 800, self.scroll_y]
+        if js == pc._SCROLL_Y_JS:
+            return self.scroll_y
         return 800
 
     def inner_text(self, selector, timeout=None):
@@ -106,6 +131,9 @@ class FakePage:
 
     def wait_for_load_state(self, state, timeout=None):
         self.log.append(("load", state))
+
+    def wait_for_timeout(self, ms):
+        self.log.append(("wait", ms))
 
     def go_back(self, wait_until=None, timeout=None):
         if self.back_url:
@@ -527,3 +555,83 @@ class TestTabs(Case):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPageCodeRisk(Case):
+    def test_a_risky_button_is_not_clicked_whatever_its_name(self):
+        self.page.risky["e4"] = "submit"
+        with self.assertRaisesRegex(PermissionError, "page code says 'submit'"):
+            pc.click(self.element("e4", "Hozz\u00e1sz\u00f3l\u00e1s"))
+        self.assertNotIn(("click", "e4", "left"), self.page.log)
+
+    def test_an_answered_cookie_button_skips_the_check(self):
+        self.page.risky["e9"] = "submit"  # consent forms submit
+        result = pc.click(self.element("e9", "Accept all"), check_code=False)
+        self.assertEqual(result["clicked"], "Accept all")
+
+    def test_a_plain_button_is_clicked(self):
+        self.assertEqual(pc.click(self.element("e4", "Search"))["clicked"], "Search")
+
+
+class TestCommentBoxes(Case):
+    def test_an_editable_box_and_its_placeholder_are_listed(self):
+        self.page.snapshot = "\n".join([
+            "- generic [ref=e2] [box=8,8,600,18]: Hozz\u00e1sz\u00f3l\u00e1s \u00edr\u00e1sa\u2026",
+            '- generic "Hozz\u00e1sz\u00f3l\u00e1s \u00edr\u00e1sa\u2026" [ref=e4] [box=8,26,600,18]',
+        ])
+        self.page.facts = [[8, 8, 600, 18, "", False, False, True], [8, 26, 600, 18, "", False, True, False]]
+        _all, result = pc.list_page()
+        self.assertIn('Clickable "Hozz\u00e1sz\u00f3l\u00e1s \u00edr\u00e1sa\u2026"', result["elements"])
+        self.assertIn('Edit "Hozz\u00e1sz\u00f3l\u00e1s \u00edr\u00e1sa\u2026"', result["elements"])
+
+
+class TestFieldsFirstOnScreen(unittest.TestCase):
+    def test_a_text_field_comes_before_other_on_screen_elements(self):
+        els = [PageElement(i, f"Video {i}", "Hyperlink", "link", f"e{i}") for i in range(1, 5)]
+        els.append(PageElement(9, "Add a comment", "Edit", "textbox", "e9"))
+        els.append(PageElement(10, "Far field", "Edit", "textbox", "e10", where="below"))
+        names = [el.name for el in pc.order_elements(els, "", set())]
+        self.assertEqual(names[0], "Add a comment")
+        self.assertEqual(names[-1], "Far field")  # on screen still beats scrolled away
+
+
+class TestScroll(Case):
+    def test_scrolls_one_screen_with_the_wheel_and_waits(self):
+        result = pc.scroll("down")
+        self.assertIn(("mouse_move", 640, 400), self.page.log)
+        self.assertIn(("wheel", 0, 640), self.page.log)  # 0.8 of 800
+        self.assertEqual((result["scrolled"], result["moved"], result["page"]), ("down", True, "YouTube"))
+        self.assertNotIn("note", result)
+        self.assertEqual(self.page.scroll_y, 640)
+
+    def test_up(self):
+        self.page.scroll_y = 1000
+        pc.scroll("up")
+        self.assertIn(("wheel", 0, -640), self.page.log)
+        self.assertEqual(self.page.scroll_y, 360)
+
+    def test_at_the_end_says_so(self):
+        self.page.scroll_y = self.page.scroll_max
+        result = pc.scroll("down")
+        self.assertFalse(result["moved"])
+        self.assertIn("already at the bottom", result["note"])
+        self.page.scroll_y = 0
+        self.assertIn("already at the top", pc.scroll("up")["note"])
+
+    def test_bad_direction(self):
+        with self.assertRaisesRegex(ValueError, "direction must be"):
+            pc.scroll("left")
+
+    def test_the_next_list_shows_only_what_the_scroll_brought(self):
+        pc.list_page()
+        self.page.snapshot = SNAP + '- link "A comment" [ref=e20] [cursor=pointer] [box=10,100,200,20]\n'
+        self.page.refs.add("e20")
+        pc.scroll("down")
+        _all, result = pc.list_page()
+        self.assertIn("after your scroll", result["note"])
+        self.assertEqual(result["elements"].splitlines(), ['5: Hyperlink "A comment"'])
+
+    def test_the_users_browser_in_front_is_handed_over_first(self):
+        self.address[600] = "https://www.youtube.com/watch?v=abc"
+        result = pc.scroll("down", handover_hwnd=600)
+        self.assertIn("opened in the agent's browser", result["note"])

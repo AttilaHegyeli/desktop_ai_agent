@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 from desktop_ai_agent.core.chat_client import ChatClient
+from desktop_ai_agent.core.embeddings import DEFAULT_MODEL as DEFAULT_EMBED_MODEL
 from desktop_ai_agent.core.folder_index import ProgramCatalog
 from desktop_ai_agent.core.folder_index.tool import set_catalog, tool_usage_hint
 from desktop_ai_agent.core.monitors import Monitor, report_at_setup
@@ -39,6 +40,7 @@ class SessionSetup:
         ollama_cfg = setup.get("ollama", {})
         self.base_model = ollama_cfg.get("base_model", "gemma4")
         self.agent_model = ollama_cfg.get("agent_model", "gemma4-agent")
+        self.embed_model = str(ollama_cfg.get("embed_model") or DEFAULT_EMBED_MODEL)
         self.commands: list[str] = list(ollama_cfg.get("interactive_commands", []))
         self.host = ollama_cfg.get("host", "http://127.0.0.1:11434")
 
@@ -80,6 +82,7 @@ class SessionSetup:
 
         self.service.ensure_running(log=emit)
         self.service.ensure_model(self.base_model, log=emit)
+        self._ensure_embed_model(emit)
 
         if not MODELFILE.exists():
             raise FileNotFoundError(f"Missing Modelfile: {MODELFILE}")
@@ -94,6 +97,15 @@ class SessionSetup:
         )
         emit("Agent ready — chat terminal unlocked (nothink + JSON).")
         return self.chat
+
+    def _ensure_embed_model(self, emit: LogFn) -> None:
+        """The site maps' embedding model (~560 MB, runs on the CPU). Never fatal: without it
+        the maps only compare words."""
+        try:
+            self.service.ensure_model(self.embed_model, log=emit)
+        except Exception as exc:  # noqa: BLE001 - offline, disk full...: the app still works
+            emit(f"Embedding model '{self.embed_model}' is not installed ({exc}). Site maps will compare "
+                 f"words only; install it with: ollama pull {self.embed_model}")
 
     def _detect_monitors(self, log: LogFn | None = None) -> None:
         emit = log or (lambda _m: None)

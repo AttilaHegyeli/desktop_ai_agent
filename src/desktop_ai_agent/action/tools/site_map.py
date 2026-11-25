@@ -3,9 +3,9 @@
   site_map(action="map")      explore the site of the page in front (site_crawler.py),
                               embed every name on the CPU (core/embeddings.py), save the map
   site_map(action="find")     where is X: word matches first, then matches by meaning;
-                              the top 3 with the way to reach each, and match 1 is shown on
+                              the best 5 (cloud models: 8) with the way to reach each, and match 1 is shown on
                               the page right away (outlined, numbered for click)
-  site_map(action="show")     show match 2 or 3 of the last find
+  site_map(action="show")     show another match (2, 3...) of the last find
   site_map(action="outline")  a short overview the model introduces the site from
 
 Rules kept in code (owner's decisions, 2026-11-25):
@@ -36,11 +36,15 @@ from desktop_ai_agent.input.site_pages import site_host
 
 ACTIONS = ("map", "find", "show", "outline")
 MAP_VERSION = 1
-TOP_HITS = 3
-KEYWORD_WEIGHT = 0.5  # all words of the request in a name ~ a clearly better meaning score
+TOP_HITS_LOCAL = 5  # Gemma: ~35 tokens a line (measured on YouTube: right answer in the top 3 for 18 of 26
+#                     requests, top 5 for 20, top 8 for 22)
+TOP_HITS_CLOUD = 8  # a cloud model reads the site's language and picks the match that fits
+KEYWORD_WEIGHT = 0.25  # words shared with a name; lower than 0.5 (measured 2026-11-25: English words in
+#                        foreign content names beat the right entry)
 EXACT_BONUS = 1.0  # the name IS the request: always first
+STRUCTURE_BONUS = 0.1  # menu and navigation entries are the site's structure, not its content
 CONTEXT_WEIGHT = 0.2  # where an item sits (its page path, its menu) counts a little too
-LOOSE_SCORE = 0.5  # best match below this and no word match: only a loose match (measured 2026-11-25)
+LOOSE_SCORE = 0.6  # best match below this and no word match: only a loose match (measured 2026-11-25, incl. STRUCTURE_BONUS)
 OUTLINE_CHARS_LOCAL = 1600  # ~400 tokens: Gemma has an 8k context
 OUTLINE_CHARS_CLOUD = 6000  # ~1,500 tokens
 MAP_MINUTES = "about 2 minutes"
@@ -203,7 +207,7 @@ def build_map(crawl: CrawlResult, should_stop: Callable[[], bool] | None = None)
     return site, note
 
 
-def rank(site: SiteMap, query: str, query_vector: Sequence[float] | None, top: int = TOP_HITS) -> list[Hit]:
+def rank(site: SiteMap, query: str, query_vector: Sequence[float] | None, top: int = TOP_HITS_LOCAL) -> list[Hit]:
     """Best items for `query`: name == request, then word matches, then meaning.
 
     One hit per name: a name repeated on several pages ("Settings" link, menu item and
@@ -223,6 +227,8 @@ def rank(site: SiteMap, query: str, query_vector: Sequence[float] | None, top: i
         if use_meaning:
             score += embeddings.dot(query_vector, site.vectors[i])  # type: ignore[index]
             score += CONTEXT_WEIGHT * places.get(item_context(site.pages, item), 0.0)
+        if score > 0 and item.area in ("menu", "nav"):  # only a tie-breaker between real matches
+            score += STRUCTURE_BONUS
         if fold(item.label) == exact:
             score += EXACT_BONUS
         hits.append(Hit(i, score, found > 0))
@@ -369,10 +375,10 @@ def _show_note(number: int, shown: PageElement | None, result: dict[str, Any], s
     return note
 
 
-def _find(site: SiteMap, query: str) -> tuple[dict[str, Any], PageElement | None]:
+def _find(site: SiteMap, query: str, cloud: bool = False) -> tuple[dict[str, Any], PageElement | None]:
     global _last_hits
     vector, meaning_note = _query_vector(site, query)
-    hits = rank(site, query, vector)
+    hits = rank(site, query, vector, TOP_HITS_CLOUD if cloud else TOP_HITS_LOCAL)
     result: dict[str, Any] = {"site": site.host, "find": query}
     if not hits:
         result["matches"] = ""
@@ -387,7 +393,11 @@ def _find(site: SiteMap, query: str) -> tuple[dict[str, Any], PageElement | None
     result.update(show_result)
     notes = [_show_note(1, shown, show_result, site)]
     if len(hits) > 1:
-        notes.append("If it is not what the user meant, call site_map with action show and number 2 or 3.")
+        choice = "2" if len(hits) == 2 else f"2 to {len(hits)}"
+        notes.append(
+            "If match 1 is not what the user meant (the names are in the site's language), pick the one that "
+            f"fits from the list and call site_map with action show and its number ({choice})."
+        )
     best = hits[0]
     if not best.words and best.score < LOOSE_SCORE:
         notes.append("These are only loose matches: the site may not have it, or it is in a part that was not mapped.")
@@ -415,6 +425,8 @@ def _map(find: str | None, request: str, cloud: bool, handover_hwnd: int | None)
     site, note = build_map(crawl, _cancel.is_set)
     save_map(site)
     summary: dict[str, Any] = {"mapped": site.host, "pages": len(site.pages), "items": len(site.items)}
+    if crawl.outside or crawl.skipped:
+        summary["left_out"] = crawl.outside + crawl.skipped  # legal / marketing pages, other sites
     if site.partial:
         summary["partial"] = site.partial
     if not find:
@@ -423,7 +435,7 @@ def _map(find: str | None, request: str, cloud: bool, handover_hwnd: int | None)
         page_control.check_cloud(site.start, cloud, request)
     except PermissionError as exc:
         return {**summary, "note": f"{exc} Then call site_map with action find."}, None
-    result, shown = _find(site, find)
+    result, shown = _find(site, find, cloud)
     if note:
         result["note"] = result.get("note", "") + f" (Meaning data could not be made: {note}.)"
     return {**summary, **result}, shown
@@ -457,7 +469,7 @@ def run(
         return {"site": site.host, "outline": outline(site, cloud)}, None
     if not find or not find.strip():
         raise ValueError("find needs what to look for in the user's words, e.g. find='privacy settings'.")
-    return _find(site, find.strip())
+    return _find(site, find.strip(), cloud)
 
 
 def _show_again(number: int | None, request: str, cloud: bool) -> tuple[dict[str, Any], PageElement | None]:

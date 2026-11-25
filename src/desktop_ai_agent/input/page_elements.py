@@ -58,6 +58,8 @@ TEXT_TYPES = frozenset({"Edit", "SearchBox", "ComboBox"})
 
 # Pointer-cursor containers (clickable divs without a role) get this type.
 CLICKABLE_TYPE = "Clickable"
+EDITABLE_NAME = "Text box"  # an editable box with no name and no text yet
+MAX_FOCUSABLE_NAME = 60  # longer text on a focusable element: a whole panel, not a placeholder
 
 # Roles that never become their own line, even with a pointer cursor.
 _NOT_ELEMENTS = frozenset({"text", "img", "image", "presentation", "none", "paragraph", "heading"})
@@ -106,6 +108,7 @@ class PageElement:
     checked: bool = False
     disabled: bool = False
     placeholder: str = ""
+    click_at: tuple[int, int] | None = None  # point inside it to click (from its top-left); None = centre
 
 
 # ---- text helpers ------------------------------------------------------------------
@@ -271,7 +274,12 @@ def _where(box: tuple[float, float, float, float] | None, viewport_height: float
 
 
 def page_elements(
-    nodes: list[SnapNode], viewport_height: float | None = None, page_key: int = 0
+    nodes: list[SnapNode],
+    viewport_height: float | None = None,
+    page_key: int = 0,
+    editable_refs: frozenset[str] = frozenset(),
+    focusable_refs: frozenset[str] = frozenset(),
+    field_names: dict[str, str] | None = None,
 ) -> list[PageElement]:
     """Named elements the user can act on, in page order, exact duplicates dropped.
 
@@ -280,7 +288,13 @@ def page_elements(
     child, so only the outer one is the real button). Unnamed fields use their
     placeholder; unnamed pointer containers use their own text. Zero-size boxes are
     dropped: nothing there can be clicked.
+
+    The snapshot does not mark editable boxes (YouTube's comment box is a plain
+    "generic") or keyboard-focusable placeholders that open one ("Add a comment...").
+    The page script finds those; `editable_refs` become Edit fields, `focusable_refs`
+    Clickable ones. `field_names` names fields the snapshot shows without a name.
     """
+    field_names = field_names or {}
     kept: set[int] = set()
     found: list[PageElement] = []
     seen: set[tuple[str, str]] = set()
@@ -290,15 +304,20 @@ def page_elements(
         box = node.box
         if box is not None and (box[2] <= 0 or box[3] <= 0):
             continue
-        if node.role in INTERACTIVE_ROLES:
+        if node.ref in editable_refs and node.role not in INTERACTIVE_ROLES:
+            kind = "Edit"
+            name = node.name or node.props.get("placeholder", "") or _text_within(i, nodes) or field_names.get(node.ref, "") or EDITABLE_NAME
+        elif node.role in INTERACTIVE_ROLES:
             kind = type_for_role(node.role)
-            name = node.name or node.props.get("placeholder", "") or (_text_within(i, nodes) if node.role == "row" else "")
-        elif node.pointer and not _inside_kept(i, nodes, kept):
+            name = node.name or node.props.get("placeholder", "") or field_names.get(node.ref, "") or (_text_within(i, nodes) if node.role == "row" else "")
+        elif (node.pointer or node.ref in focusable_refs) and not _inside_kept(i, nodes, kept):
             parent = node.parent
             if parent is not None and nodes[parent].pointer:
                 continue  # an inner part of a clickable container
             kind = CLICKABLE_TYPE
             name = node.name or _text_within(i, nodes)
+            if not node.pointer and len(name) > MAX_FOCUSABLE_NAME:
+                continue  # a focusable container (a whole panel), not something to click
         else:
             continue
         kept.add(i)

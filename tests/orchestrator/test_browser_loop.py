@@ -22,6 +22,7 @@ def make_executor(click_result):
         ActionSpec("click", "click", Risk.MEDIUM, element),
         ActionSpec("browser_go", "go", Risk.MEDIUM, (Param("action", "string", "a"),)),
         ActionSpec("browser_read", "read", Risk.LOW, INJECTED),
+        ActionSpec("scroll", "scroll", Risk.LOW, (Param("direction", "string", "d"),)),
     ]
     ran = []
 
@@ -59,6 +60,12 @@ class TestPageFollowUps(unittest.TestCase):
         ex, ran = make_executor({})
         run(ScriptedClient([tools(call("browser_go", action="back")), ChatTurn(content="ok")]), ex)
         self.assertEqual([n for n, _ in ran], ["browser_go", "list_elements"])
+        self.assertEqual(ran[1][1]["area"], "page")
+
+    def test_scroll_gets_a_fresh_page_list(self):
+        ex, ran = make_executor({})
+        run(ScriptedClient([tools(call("scroll", direction="down")), ChatTurn(content="ok")]), ex)
+        self.assertEqual([n for n, _ in ran], ["scroll", "list_elements"])
         self.assertEqual(ran[1][1]["area"], "page")
 
     def test_follow_up_plan_without_results_keeps_the_old_rule(self):

@@ -18,7 +18,7 @@ text / voice  →  input  →  orchestrator  →  gemma4 (core)  →  action lay
 | **Chat** | Always-on-top top-edge bar (hover to expand; context meter; Stop / New chat / Config) |
 | **Voice in** | Mic push-to-talk + wake word (“hey Zsuzsi” / variants) via faster-whisper |
 | **Core AI** | Ollama + `gemma4` / `gemma4-agent`, tool calling, folder index (apps + AppX) |
-| **Actions** | `open_app`, `web_search`, `web_open`, `screenshot`, `wait`, `list_elements`, `move_mouse`, `click`, `type_text`, `browser_read`, `browser_go`, `site_map`, `provide_script` (display only) |
+| **Actions** | `open_app`, `web_search`, `web_open`, `screenshot`, `wait`, `list_elements`, `move_mouse`, `click`, `type_text`, `browser_read`, `browser_go`, `scroll`, `site_map`, `provide_script` (display only) |
 | **Voice out** | TTS via edge-tts (or offline SAPI) |
 | **Safety** | Registry + executor gate; high-risk actions denied until confirm UI exists |
 | **Deps** | Runtime packages install **automatically on every start** |
@@ -100,7 +100,9 @@ Voice / TTS / screenshot / UI Automation packages are part of the startup instal
   when that browser is in front). If **your own** browser is in front, its page is opened in the agent's
   browser first. Tabs appear under its window in `list_windows`; `window_control` switches / closes them.
 - Safety: no typing into password fields, Enter only in search fields, risky buttons (send, post, submit,
-  turn in, delete, buy, ...) refused, cookie buttons only after you answer, downloads blocked. With a
+  turn in, delete, buy, ...) refused by their name or by their page code (`id="submit-button"`, form
+  submits, Ctrl+Enter hints, log-out links), so a Hungarian "Küldés" is caught too; cookie buttons only
+  after you answer, downloads blocked. Comments and messages: the agent types the draft, you press send. With a
   cloud model, Gmail / Classroom / Docs / Drive are read only after you say "proceed" (until New chat).
 - While the app is connected, page popups (alert / confirm / "Leave site?") are answered "cancel".
 
@@ -109,11 +111,13 @@ Voice / TTS / screenshot / UI Automation packages are part of the startup instal
 - Only when you ask ("map this site") the agent explores the site of the page in front, read-only, in a
   second tab: same-site links (menus and navigation first), menu buttons opened once each, at most 40
   pages / 5 minutes. It never types, submits or toggles, and skips log-out / delete / download links,
-  files, other sites and content (videos, emails). Stop keeps what was mapped (marked partial).
+  files, other sites and content (videos, emails). Pages outside the app (legal and marketing pages
+  with a header of their own) are left out. Stop keeps what was mapped (marked partial). Each page's
+  time is saved in the map.
 - Every name is embedded on the **CPU** by Ollama (`paraphrase-multilingual:278m`, ~560 MB RAM, no VRAM),
-  so an English question finds a Hungarian label. Install it once: `ollama pull paraphrase-multilingual:278m`
-  (optional `ollama.embed_model` in `config/setup.json`). Without it, finding falls back to words.
-- "Where is X": `site_map(find=...)` returns the top 3 with the way to each and shows match 1 (opens the
+  so an English question finds a Hungarian label. Startup pulls it if missing (one time, ~560 MB; optional
+  `ollama.embed_model` in `config/setup.json`). If the pull fails the app still starts and finding compares words.
+- "Where is X": `site_map(find=...)` returns the top 5 (cloud models: 8) with the way to each and shows match 1 (opens the
   page / menu and outlines it; its number works with `click`). "Introduce the site": `site_map(outline)`.
 - Maps are saved in `%LOCALAPPDATA%\desktop_ai_agent\site_maps\<site>.json` (outside the repo).
 
@@ -130,7 +134,8 @@ Voice / TTS / screenshot / UI Automation packages are part of the startup instal
 | `open_app` | medium | indexed launchers only; no launch args |
 | `web_open` | medium | `http` / `https` only; new tab in the agent's browser |
 | `browser_go` | medium | back / forward / reload |
-| `site_map` | medium | map (only when asked) / find (top 3, shows match 1) / show 2-3 / outline |
+| `scroll` | low | web page down / up by ~one screen (loads comments, feeds); the page list that follows shows what appeared |
+| `site_map` | medium | map (only when asked) / find (top 5, cloud 8; shows match 1) / show another / outline |
 | `move_mouse` | medium | by element number (model never sends raw coords); outlines it on a web page |
 | `click` | medium | left/right, optional double; rate-limited; corner emergency stop |
 | `type_text` | medium | paste into inputs; Enter only via `submit` in web search fields; no passwords |

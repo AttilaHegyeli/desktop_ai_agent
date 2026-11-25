@@ -113,9 +113,21 @@ def by_window_order(elements: list[UiElement], z_order: list[int]) -> list[UiEle
     return sorted(elements, key=lambda e: rank.get(e.hwnd, len(rank)))
 
 
-def risky_word(name: str) -> str | None:
-    match = _RISKY.search(name or "")
-    return match.group(0) if match else None
+_PLACEHOLDER = re.compile(r"(\.\.\.|\u2026)\s*$")  # "Add a comment..." ends like a box's placeholder
+
+
+def risky_word(name: str, web: bool = False) -> str | None:
+    """The risky word in an element's name, or None.
+
+    On a web page (`web`), "comment" in a placeholder name ("Add a comment...") is not
+    risky: that only opens the box (owner, 2026-11-25: the agent may type a comment, the
+    user sends it). The send button itself is caught by page_control's page-code check.
+    """
+    for match in _RISKY.finditer(name or ""):
+        if web and match.group(0).casefold() == "comment" and _PLACEHOLDER.search(name):
+            continue
+        return match.group(0)
+    return None
 
 
 def _bounds(monitors: list[Any]) -> tuple[int, int, int, int] | None:
@@ -290,14 +302,15 @@ def click(element: int, button: str = "left", double: bool = False, request: str
     _check_emergency_stop(monitors)
     now = _check_rate()
     target = _resolve(element, monitors)
-    word = risky_word(target.name)
+    word = risky_word(target.name, web=isinstance(target, PageElement))
     if word:
         raise PermissionError(
             f"'{target.name}' looks risky ('{word}'). Do not click it: ask the user to do this themselves."
         )
     if isinstance(target, PageElement):
         page_control.check_consent_click(target.name, request)
-        result = page_control.click(target, button, double)
+        consent = page_control.consent_choice(target.name) is not None  # answered: its form may submit
+        result = page_control.click(target, button, double, check_code=not consent)
         mouse_safety.record_click(now)
         _last, _cleared_by = None, "click"
         return result

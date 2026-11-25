@@ -375,20 +375,32 @@ def build_default_registry() -> ActionRegistry:
                 ),
             ),
             ActionSpec(
+                name="scroll",
+                description=(
+                    "Scroll the web page in the agent's browser down or up by about one screen. Use it "
+                    "when the element you need is not listed or is marked (below), or to load content "
+                    "that appears while scrolling (comments, feeds). The page list is refreshed after it."
+                ),
+                risk=Risk.LOW,
+                params=(
+                    Param("direction", "string", "Which way to scroll", enum=("down", "up")),
+                ),
+            ),
+            ActionSpec(
                 name="site_map",
                 description=(
                     "Site map of the site open in the agent's browser: where something is (a setting, "
                     "a section) and an overview to introduce the site. action: map = explore and save "
                     "the site (only when the user asks to map it; takes about 2 minutes; add find when "
                     "they also asked where something is), find = the best matches for find, and match 1 "
-                    "is shown on the page, show = show match number 2 or 3 of the last find, outline = "
+                    "is shown on the page, show = show another match (2, 3...) of the last find, outline = "
                     "overview of the mapped site."
                 ),
                 risk=Risk.MEDIUM,
                 params=(
                     Param("action", "string", "What to do", enum=("map", "find", "show", "outline")),
                     Param("find", "string", "What to look for, in the user's words", required=False, max_length=100),
-                    Param("number", "integer", "Match number from the last find (show)", required=False, minimum=1, maximum=3),
+                    Param("number", "integer", "Match number from the last find (show)", required=False, minimum=1, maximum=8),
                     _request_param("used to check that they asked for a map"),
                     _CLOUD,
                 ),

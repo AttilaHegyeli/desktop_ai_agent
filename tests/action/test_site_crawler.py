@@ -1,69 +1,89 @@
 """Tests for action/tools/site_crawler.py against a fake site in a fake browser:
 no real browser, page or network is touched."""
+import itertools
 import unittest
 from unittest import mock
 
 from desktop_ai_agent.action.tools import browser_session as bs
 from desktop_ai_agent.action.tools import site_crawler as sc
+from desktop_ai_agent.input.page_elements import parse_snapshot
+from desktop_ai_agent.input.site_pages import ELEMENT_FACTS_JS
 
 PwError = type("Error", (Exception,), {"__module__": "playwright._impl._errors"})
 
 ROOT = "https://example.com/"
+_y = itertools.count(0, 25)  # every element gets its own box, as on a real page
 
 
-def link(ref, name, url, indent="  "):
-    return f'{indent}- link "{name}" [ref={ref}] [cursor=pointer] [box=0,0,100,20]:\n{indent}  - /url: {url}\n'
+def el(role, name, ref, url=None, indent="  "):
+    line = f'{indent}- {role} "{name}" [ref={ref}] [cursor=pointer] [box=0,{next(_y)},100,20]'
+    return line + (f":\n{indent}  - /url: {url}\n" if url else "\n")
 
 
-HOME = (
-    "- banner [ref=e1] [box=0,0,1000,60]:\n"
-    '  - button "Account menu" [ref=e2] [box=900,10,40,40]\n'
-    '  - button "Like" [ref=e3] [box=800,10,40,40]\n'
-    '  - button "Delete everything" [ref=e4] [box=700,10,40,40]\n'
-    '  - button "Shop" [ref=e30] [box=600,10,40,40]\n'
-    '- navigation "Guide" [ref=e5] [box=0,60,200,600]:\n'
-    + link("e6", "Home", "/")
-    + link("e7", "History", "/feed/history")
-    + link("e8", "Log out", "/logout")
-    + link("e9", "Other site", "https://other.com/x")
-    + "- main [ref=e10] [box=200,60,800,600]:\n"
+def block(role, ref, body, name=""):
+    label = f' "{name}"' if name else ""
+    return f"- {role}{label} [ref={ref}] [box=0,{next(_y)},1000,600]:\n" + body
+
+
+# The app's header and sidebar, the same on every page of the app.
+HEADER = block("banner", "e1", (
+    el("button", "Account menu", "e2") + el("button", "Like", "e3")
+    + el("button", "Delete everything", "e4") + el("button", "Shop", "e30")
+)) + block("navigation", "e5", (
+    el("link", "Home", "e6", "/") + el("link", "History", "e7", "/feed/history")
+    + el("link", "Log out", "e8", "/logout") + el("link", "Other site", "e9", "https://other.com/x")
+    + "  - list [ref=e90] [box=0,9000,300,100]:\n"
+    + el("link", "Terms", "e91", "/t/terms", "    ") + el("link", "Press", "e92", "/about/press", "    ")
+    + el("link", "Creators", "e93", "/creators", "    ") + el("link", "Ads", "e94", "/ads", "    ")
+), "Guide")
+HOME = HEADER + block("main", "e10", (
     '  - heading "Recommended" [level=1] [ref=e11] [box=200,60,300,40]\n'
-    + link("e12", "Video one", "/watch?v=abc123XYZ")
-    + link("e13", "About", "/about")
-)
-MENU = (
-    '- menu [ref=e20] [box=850,60,150,100]:\n'
-    '  - menuitem "Settings" [ref=e21] [cursor=pointer] [box=850,60,150,30]:\n'
-    "    - /url: /account\n"
-    '  - menuitem "Help" [ref=e22] [box=850,90,150,30]\n'
-)
-ACCOUNT = (
-    "- main [ref=e40] [box=200,60,800,600]:\n"
+    + el("link", "Video one", "e12", "/watch?v=abc123XYZ") + el("link", "About", "e13", "/about")
+))
+MENU = block("menu", "e20", (
+    el("menuitem", "Settings", "e21", "/account")
+    + el("menuitem", "Help", "e22")  # no /url in the snapshot: its address comes from the page
+))
+ACCOUNT = HEADER + block("main", "e40", (
     '  - heading "Settings" [level=1] [ref=e41] [box=200,60,300,40]\n'
     '  - checkbox "Restricted mode" [ref=e42] [box=200,130,20,20]\n'
-    + link("e43", "Privacy", "/account_privacy")
-)
+    + el("link", "Privacy", "e43", "/account_privacy")
+))
+# A legal page: a header of its own, nothing in common with the app's.
+LEGAL = block("banner", "e70", (
+    el("link", "Legal home", "e71", "/t/") + el("link", "Policies", "e72", "/t/policies")
+    + el("link", "Contact", "e73", "/t/contact") + el("button", "Language", "e74")
+)) + '- heading "Terms of service" [level=1] [ref=e75] [box=0,700,300,40]\n'
+
+
+def page(heading):
+    return HEADER + f'- heading "{heading}" [level=1] [ref=e60] [box=0,800,10,10]\n'
 
 
 class FakeSite:
     def __init__(self):
         self.pages = {
             ROOT: ("Home", HOME),
-            ROOT + "feed/history": ("History", "- heading \"History\" [level=1] [ref=e50] [box=0,0,10,10]\n"),
+            ROOT + "feed/history": ("History", page("History")),
             ROOT + "account": ("Settings", ACCOUNT),
-            ROOT + "account_privacy": ("Privacy", "- heading \"Privacy\" [level=1] [ref=e60] [box=0,0,10,10]\n"),
-            ROOT + "about": ("About", "- heading \"About us\" [level=1] [ref=e70] [box=0,0,10,10]\n"),
-            ROOT + "shop": ("Shop", ""),
-            ROOT + "help": ("Help", ""),
+            ROOT + "account_privacy": ("Privacy", page("Privacy")),
+            ROOT + "about": ("About", page("About us")),
+            ROOT + "shop": ("Shop", page("Shop")),
+            ROOT + "help": ("Help", page("Help")),
+            ROOT + "t/terms": ("Terms", LEGAL),
+            ROOT + "about/press": ("Press", LEGAL),
+            ROOT + "creators": ("Creators", LEGAL),
+            ROOT + "ads": ("Ads", LEGAL),
         }
-        # Menu entries the snapshot shows without /url: their address comes from the page.
-        self.hrefs = {"e22": ROOT + "help"}
         self.menus = {"e2": MENU}
         self.popups = {"e2", "e4", "e30"}
         self.navigates = {"e30": ROOT + "shop"}
+        self.hrefs = {"e22": ROOT + "help"}
+        self.risky_code = {}  # ref -> what its page code says
         self.redirects = {}
         self.broken = set()
-        self.visits, self.clicks, self.checked = [], [], []
+        self.visits, self.clicks = [], []
+        self.fact_calls = 0
 
 
 class FakeKeyboard:
@@ -80,11 +100,8 @@ class FakeLoc:
         self.tab, self.ref = tab, ref
 
     def evaluate(self, js, arg=None, timeout=None):
-        if js == sc.HREF_JS:
-            return self.tab.site.hrefs.get(self.ref, "")
-        assert js == sc.POPUP_JS
-        self.tab.site.checked.append(self.ref)
-        return self.ref in self.tab.site.popups
+        assert js == sc.code_risk.__globals__["RISK_JS"]
+        return self.tab.site.risky_code.get(self.ref, "")
 
     def click(self, timeout=None):
         site = self.tab.site
@@ -122,6 +139,16 @@ class FakeTab:
     def aria_snapshot(self, mode=None, boxes=None, timeout=None):
         text = self.site.pages.get(self.url, ("", ""))[1]
         return text + (self.site.menus.get(self.menu, "") if self.menu else "")
+
+    def evaluate(self, js):
+        assert js == ELEMENT_FACTS_JS  # the only script the crawler runs
+        self.site.fact_calls += 1
+        rows = []
+        for node in parse_snapshot(self.aria_snapshot()):
+            if node.ref and node.box:
+                x, y, w, h = (int(v) for v in node.box)
+                rows.append([x, y, w, h, self.site.hrefs.get(node.ref, ""), node.ref in self.site.popups, False])
+        return rows
 
     def locator(self, selector):
         return FakeLoc(self, selector[len("aria-ref="):])
@@ -174,15 +201,24 @@ class Case(unittest.TestCase):
 
 
 class TestExploring(Case):
-    def test_menus_and_navigation_first_then_the_rest(self):
+    def test_nearest_first_menus_first_then_navigation_then_the_rest(self):
         result = self.crawl()
         self.assertEqual(
             [p.url for p in result.pages],
-            [ROOT, ROOT + "feed/history", ROOT + "account", ROOT + "help", ROOT + "shop", ROOT + "about",
+            [ROOT, ROOT + "account", ROOT + "help", ROOT + "shop", ROOT + "feed/history", ROOT + "about",
              ROOT + "account_privacy"],
         )
         self.assertEqual(result.host, "example.com")
         self.assertEqual(result.partial, "")
+
+    def test_legal_pages_are_left_out_and_the_rest_of_their_group_skipped(self):
+        result = self.crawl()
+        urls = " ".join(p.url for p in result.pages)
+        self.assertNotIn("/t/terms", urls)
+        self.assertEqual((result.outside, result.skipped), (2, 2))  # terms + press visited, 2 skipped
+        self.assertNotIn(ROOT + "creators", self.site.visits)
+        self.assertNotIn(ROOT + "ads", self.site.visits)
+        self.assertFalse(any(it.label == "Terms of service" for it in result.items))
 
     def test_never_opens_risky_foreign_or_content_links(self):
         self.crawl()
@@ -190,19 +226,24 @@ class TestExploring(Case):
         for bad in ("logout", "other.com", "watch?v="):
             self.assertNotIn(bad, visited)
 
-    def test_risky_buttons_are_never_checked_or_clicked(self):
+    def test_risky_and_plain_buttons_are_never_clicked(self):
         self.crawl()
-        self.assertNotIn("e4", self.site.checked)
-        self.assertNotIn("e4", self.site.clicks)
-        self.assertNotIn("e3", self.site.clicks)  # no menu: not clicked
+        self.assertNotIn("e4", self.site.clicks)  # "Delete everything" opens a menu but is risky
+        self.assertNotIn("e3", self.site.clicks)  # "Like" opens nothing
 
-    def test_menu_items_keep_their_button(self):
+    def test_one_script_call_per_page_read(self):
+        result = self.crawl()
+        menus_opened = 1  # the account menu (the shop button navigated away)
+        loaded = len(result.pages) + result.outside
+        self.assertEqual(self.site.fact_calls, loaded + menus_opened)
+
+    def test_menu_items_keep_their_button_and_address(self):
         result = self.crawl()
         settings = next(it for it in result.items if it.label == "Settings" and it.kind == "MenuItem")
         self.assertEqual((settings.menu, settings.area, settings.page), ("Account menu", "menu", 0))
         self.assertEqual(settings.url, ROOT + "account")
-        help_item = next(it for it in result.items if it.label == "Help")
-        self.assertEqual((help_item.menu, help_item.url), ("Account menu", ROOT + "help"))  # read from the page
+        help_item = next(it for it in result.items if it.label == "Help" and it.kind == "MenuItem")
+        self.assertEqual((help_item.menu, help_item.url), ("Account menu", ROOT + "help"))
 
     def test_way_to_each_page(self):
         result = self.crawl()
@@ -220,9 +261,13 @@ class TestExploring(Case):
         self.assertNotIn(("Video one", "Hyperlink"), labels)
 
     def test_each_menu_button_is_opened_once_per_site(self):
-        self.site.pages[ROOT + "about"] = ("About", HOME)  # the same header again
-        self.crawl()
+        self.crawl()  # every page of the app has the account menu button
         self.assertEqual(self.site.clicks.count("e2"), 1)
+
+    def test_time_per_page_is_kept(self):
+        ticks = itertools.count(0, 2)
+        result = self.crawl(clock=lambda: float(next(ticks)))
+        self.assertTrue(all(p.seconds > 0 for p in result.pages))
 
     def test_mapping_tab_closes_and_the_user_tab_stays(self):
         self.crawl()
@@ -255,7 +300,8 @@ class TestLimits(Case):
         urls = [p.url for p in result.pages]
         self.assertNotIn(ROOT + "about", urls)
         self.assertNotIn(ROOT + "feed/history", urls)
-        self.assertEqual(result.failed, 2)
+        self.assertEqual(result.failed, 1)
+        self.assertEqual(result.outside, 3)  # the login page + 2 legal pages
 
     def test_not_a_web_page(self):
         self.user_tab.url = "about:blank"
@@ -268,3 +314,11 @@ class TestLimits(Case):
         self.live.current = None
         with self.assertRaisesRegex(LookupError, "web_open"):
             self.crawl()
+
+
+class TestRiskyCode(Case):
+    def test_a_menu_button_whose_code_is_risky_is_not_clicked(self):
+        self.site.risky_code["e2"] = "delete"
+        result = self.crawl()
+        self.assertNotIn("e2", self.site.clicks)
+        self.assertFalse(any(it.menu == "Account menu" for it in result.items))
