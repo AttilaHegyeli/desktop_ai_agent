@@ -1,0 +1,167 @@
+{
+  "ollama": {
+    "base_model": "gemma4",
+    "agent_model": "gemma4-agent",
+    "host": "http://127.0.0.1:11434",
+    "startup_timeout_sec": 60,
+    "interactive_commands": [
+      "/set nothink",
+      "/set format json"
+    ]
+  },
+  "core_ai": {
+    "selected": "local:gemma4",
+    "local_context_tokens": 8192,
+    "openrouter": {
+      "base_url": "https://openrouter.ai/api/v1",
+      "fallback_model": "google/gemini-2.5-flash",
+      "models": [
+        {
+          "id": "openai/gpt-4.1",
+          "label": "GPT-4.1",
+          "context_tokens": 1048576
+        },
+        {
+          "id": "openai/gpt-4o",
+          "label": "GPT-4o",
+          "context_tokens": 128000
+        },
+        {
+          "id": "anthropic/claude-sonnet-4",
+          "label": "Claude Sonnet 4",
+          "context_tokens": 200000
+        },
+        {
+          "id": "google/gemini-2.5-pro",
+          "label": "Gemini 2.5 Pro",
+          "context_tokens": 1048576
+        },
+        {
+          "id": "google/gemini-2.5-flash",
+          "label": "Gemini 2.5 Flash",
+          "context_tokens": 1048576
+        }
+      ]
+    }
+  },
+  "folder_index": {
+    "enabled": true,
+    "drives": [
+      "C",
+      "D",
+      "E"
+    ],
+    "apps": {
+      "enabled": true,
+      "include_start_menu": true,
+      "include_installed_apps": true,
+      "include_appx": true,
+      "include_games_folders": true,
+      "extra_roots": [],
+      "max_exe_depth": 4,
+      "max_exes": 20000
+    }
+  },
+  "formats": {
+    "response_schema": {
+      "script": "snake_case job id for Action layer logs/routing",
+      "code": "python source Action will exec unchanged"
+    }
+  },
+  "ui": {
+    "title": "Desktop AI Agent \u2014 Configuration",
+    "width": 820,
+    "height": 640,
+    "auto_open": true,
+    "bar_width": 620,
+    "bar_auto_hide_ms": 20000,
+    "bar_collapsed_height": 28,
+    "bar_top_margin": 10
+  },
+  "camera": {
+    "enabled": false,
+    "device_index": 0,
+    "width": 1920,
+    "height": 1080,
+    "max_num_hands": 2,
+    "mirror": true,
+    "overlay_opacity": 0.2,
+    "feed_gain": 0.75,
+    "show_feed": true,
+    "detection_confidence": 0.7,
+    "tracking_confidence": 0.6,
+    "preview_max_side": 960,
+    "pointing_enabled": true,
+    "mouse_follow": true,
+    "pinch_threshold": 0.07,
+    "pinch_release": 0.11,
+    "pinch_release_frames": 5,
+    "mouse_poll_hz": 20,
+    "track_left": 0.28,
+    "track_top": 0.22,
+    "track_right": 0.72,
+    "track_bottom": 0.72,
+    "click_dwell_sec": 1.5,
+    "still_px": 14,
+    "drag_hold_sec": 1.0,
+    "scroll_ticks": 3,
+    "gesture_frames": 3
+  },
+  "voice": {
+    "enabled": true,
+    "model_size": "base",
+    "language": "en",
+    "sample_rate": 16000,
+    "device": "cpu",
+    "compute_type": "int8",
+    "wake_word": {
+      "enabled": true,
+      "phrases": [
+        "Zsuzsi",
+        "hi",
+        "Hey",
+        "hey",
+        "hey zsuzsi",
+        "hey susie",
+        "hey sushi",
+        "hey sooshi",
+        "hey suzy",
+        "hey suzie"
+      ],
+      "silence_sec": 3.0,
+      "post_wake_grace_sec": 5.0,
+      "max_utterance_sec": 30,
+      "chunk_sec": 0.8,
+      "energy_threshold": 0.005,
+      "stop_phrases": [
+        "stop",
+        "sleep",
+        "go to sleep",
+        "that's all",
+        "goodbye"
+      ]
+    }
+  },
+  "output": {
+    "tts": {
+      "enabled": true,
+      "engine": "edge",
+      "voice": "en-US-JennyNeural",
+      "rate": "+0%",
+      "volume": 1.0,
+      "wake_ack": "yes my lord?"
+    }
+  },
+  "remote": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8765,
+    "lock_input": true,
+    "idle_timeout_s": 60,
+    "max_call_minutes": 30,
+    "tunnel": {
+      "enabled": true,
+      "show_window": true
+    }
+  }
+}
