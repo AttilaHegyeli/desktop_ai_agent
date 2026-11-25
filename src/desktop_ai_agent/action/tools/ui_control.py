@@ -209,6 +209,11 @@ def user_browser_in_front() -> int | None:
     return hwnd if _browser_kind(hwnd) == "user" else None
 
 
+def remember_page_elements(elements: list[PageElement]) -> None:
+    """Page elements another tool numbered (site_map's shown match): click takes them too."""
+    _remember_page(elements, {})
+
+
 def _remember_page(shown: list[PageElement], result: dict[str, Any]) -> dict[str, Any]:
     global _last, _cleared_by
     _last, _cleared_by = _LastList({e.id: e for e in shown}, _now()), None

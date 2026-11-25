@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from desktop_ai_agent.action.tools import page_control as _page_control
+from desktop_ai_agent.action.tools import site_map as _site_map
 from desktop_ai_agent.action.tools import ui_control as _ui_control
 from desktop_ai_agent.action.tools import window_control as _window_control
 from desktop_ai_agent.action.tools import window_wait as _window_wait
@@ -81,6 +82,23 @@ def browser_go(args: dict[str, Any]) -> dict[str, Any]:
     """Back / forward / reload in the agent's current tab. Old element numbers are stale after it."""
     result = _page_control.go(args["action"])
     _ui_control.clear_list_after_action("browser_go")
+    return result
+
+
+def site_map(args: dict[str, Any]) -> dict[str, Any]:
+    """Map a site, find where something is on it (shown on the page), or outline it."""
+    result, shown = _site_map.run(
+        args["action"],
+        args.get("find"),
+        args.get("number"),
+        args.get("request", ""),
+        args.get("cloud", False),
+        _ui_control.user_browser_in_front(),
+    )
+    if shown is not None:
+        _ui_control.remember_page_elements([shown])  # its number works with click
+    elif "shown" in result:
+        _ui_control.clear_list_after_action("site_map")  # the page changed under the old list
     return result
 
 
@@ -231,6 +249,7 @@ HANDLERS = {
     "list_elements": list_elements,
     "browser_read": browser_read,
     "browser_go": browser_go,
+    "site_map": site_map,
     "list_windows": list_windows,
     "window_control": window_control,
     "move_mouse": move_mouse,

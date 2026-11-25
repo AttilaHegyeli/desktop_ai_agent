@@ -7,6 +7,7 @@ the web cases here:
   browser_read                      -> the page's text, in parts, or around a word
   browser_go                        -> back / forward / reload
   list_windows / window_control     -> also list, switch to and close the agent's tabs
+  site_map (find / show)            -> show_item: open a mapped item's page (and menu), outline it
 
 Rules kept in code, not left to the model:
   - The user's OWN browser is in front -> the page's address is handed over to the
@@ -42,7 +43,7 @@ from urllib.parse import urlparse
 
 from desktop_ai_agent.action.tools import browser_session
 from desktop_ai_agent.action.tools.web_open import check_url
-from desktop_ai_agent.input.element_ranking import scores
+from desktop_ai_agent.input.element_ranking import fold, scores
 from desktop_ai_agent.input.page_elements import (
     PageElement,
     clean_name,
@@ -53,6 +54,7 @@ from desktop_ai_agent.input.page_elements import (
     short,
     split_parts,
 )
+from desktop_ai_agent.input.site_pages import HEADING_KIND
 
 MAX_LISTED = 60
 PART_CHARS = 1500  # about 375 tokens per browser_read part
@@ -63,6 +65,8 @@ SETTLE_LOAD_MS = 5000
 SETTLE_IDLE_MS = 1500
 CLOSE_WAIT_MS = 2000
 HIGHLIGHT_MS = 3000
+SHOW_MS = 6000  # site map: long enough to find the outline on the page
+MENU_OPEN_MS = 700
 GO_ACTIONS = ("back", "forward", "reload")
 
 PRIVATE_HOSTS = ("mail.google.com", "classroom.google.com", "docs.google.com", "drive.google.com")
@@ -583,6 +587,93 @@ def highlight(el: PageElement) -> dict[str, Any]:
     _call(work)
     _front_window()
     return {"highlighted": el.name, "type": el.type, "note": "It is outlined in red on the page for 3 s."}
+
+
+def current_page(handover_hwnd: int | None = None) -> tuple[str, str, str]:
+    """(address, title, note) of the agent's current tab. The page of the user's own
+    browser in front (`handover_hwnd`) is opened in the agent's browser first."""
+    note = hand_over(handover_hwnd) if handover_hwnd else None
+
+    def work(live: Any) -> tuple[str, str]:
+        page = _current(live)
+        return page.url, page.title()
+
+    url, title = _call(work)
+    return url, clean_name(title), note or ""
+
+
+def _same_label(name: str, label: str) -> bool:
+    """Names in a site map are cut at a length ("Long name..."): compare the kept part."""
+    name, label = fold(clean_name(name)), fold(clean_name(label))
+    if label.endswith("..."):
+        return name.startswith(label[:-3])
+    return name == label
+
+
+def _target_ref(nodes: list[Any], elements: list[PageElement], label: str, kind: str) -> str:
+    """Reference of the element named `label` (the same type first), or of the heading
+    when the map item is one ('' when not on the page)."""
+    if kind == HEADING_KIND:
+        heading = next(
+            (n for n in nodes if n.role == "heading" and n.ref and _same_label(n.name or n.text, label)), None
+        )
+        return heading.ref if heading is not None else ""
+    named = [el for el in elements if _same_label(el.name, label)]
+    best = next((el for el in named if el.type == kind), named[0] if named else None)
+    return best.ref if best is not None else ""
+
+
+def show_item(url: str, label: str, kind: str, menu: str = "") -> tuple[PageElement | None, dict[str, Any]]:
+    """Site map: go to `url` in the agent's tab, open the `menu` button when the item is
+    inside a menu, and outline the item. Returns (its numbered element when it can be
+    clicked, result). The number works with click like one from list_elements."""
+
+    def work(live: Any) -> tuple[str, str, int, str, Any, str, str]:
+        page = _current(live)
+        if not same_address(page.url, url):
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=GOTO_TIMEOUT_MS)
+            except Exception as exc:
+                if not _is_timeout(exc):
+                    raise
+            _settle(page)
+        opened = ""
+        snapshot = page.aria_snapshot(mode="ai", boxes=True, timeout=SNAPSHOT_TIMEOUT_MS)
+        nodes = parse_snapshot(snapshot)
+        elements = page_elements(nodes)
+        ref = _target_ref(nodes, elements, label, kind)
+        if menu and not ref:  # the menu is closed (an open one is not clicked: it would close)
+            opener = next((el for el in elements if _same_label(el.name, menu)), None)
+            if opener is not None:
+                page.locator(f"aria-ref={opener.ref}").click(timeout=ACTION_TIMEOUT_MS)
+                page.wait_for_timeout(MENU_OPEN_MS)
+                opened = opener.name
+                snapshot = page.aria_snapshot(mode="ai", boxes=True, timeout=SNAPSHOT_TIMEOUT_MS)
+                nodes = parse_snapshot(snapshot)
+                ref = _target_ref(nodes, page_elements(nodes), label, kind)
+        height = page.evaluate("() => window.innerHeight")
+        if ref:
+            page.locator(f"aria-ref={ref}").evaluate(_HIGHLIGHT_JS, SHOW_MS)
+        page.bring_to_front()
+        return page.title(), page.url, live.key(page), snapshot, height, ref, opened
+
+    title, now_url, key, snapshot, height, ref, opened = _call(work)
+    _front_window()
+    found = page_elements(parse_snapshot(snapshot), float(height) if height else None, key)
+    numbered, _new, memory, _had = _number(found, key, now_url)
+    memory.last_refs = frozenset(el.ref for el in numbered)
+    memory.changed_by = ""
+    target = next((el for el in numbered if el.ref == ref), None) if ref else None
+    result: dict[str, Any] = {"page": short(clean_name(title), 80), "site": host_of(now_url)}
+    if menu and not ref and not opened:
+        result["menu_not_found"] = menu
+    if not ref:
+        result["shown"] = False
+    elif target is not None:
+        result.update(shown=True, element=target.id)
+    else:
+        result["shown"] = True  # a heading: outlined, nothing to click
+    return target, result
 
 
 def go(action: str) -> dict[str, Any]:

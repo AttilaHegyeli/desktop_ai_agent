@@ -18,7 +18,7 @@ text / voice  →  input  →  orchestrator  →  gemma4 (core)  →  action lay
 | **Chat** | Always-on-top top-edge bar (hover to expand; context meter; Stop / New chat / Config) |
 | **Voice in** | Mic push-to-talk + wake word (“hey Zsuzsi” / variants) via faster-whisper |
 | **Core AI** | Ollama + `gemma4` / `gemma4-agent`, tool calling, folder index (apps + AppX) |
-| **Actions** | `open_app`, `web_search`, `web_open`, `screenshot`, `wait`, `list_elements`, `move_mouse`, `click`, `type_text`, `browser_read`, `browser_go`, `provide_script` (display only) |
+| **Actions** | `open_app`, `web_search`, `web_open`, `screenshot`, `wait`, `list_elements`, `move_mouse`, `click`, `type_text`, `browser_read`, `browser_go`, `site_map`, `provide_script` (display only) |
 | **Voice out** | TTS via edge-tts (or offline SAPI) |
 | **Safety** | Registry + executor gate; high-risk actions denied until confirm UI exists |
 | **Deps** | Runtime packages install **automatically on every start** |
@@ -104,6 +104,19 @@ Voice / TTS / screenshot / UI Automation packages are part of the startup instal
   cloud model, Gmail / Classroom / Docs / Drive are read only after you say "proceed" (until New chat).
 - While the app is connected, page popups (alert / confirm / "Leave site?") are answered "cancel".
 
+### Site maps ("map this site")
+
+- Only when you ask ("map this site") the agent explores the site of the page in front, read-only, in a
+  second tab: same-site links (menus and navigation first), menu buttons opened once each, at most 40
+  pages / 5 minutes. It never types, submits or toggles, and skips log-out / delete / download links,
+  files, other sites and content (videos, emails). Stop keeps what was mapped (marked partial).
+- Every name is embedded on the **CPU** by Ollama (`paraphrase-multilingual:278m`, ~560 MB RAM, no VRAM),
+  so an English question finds a Hungarian label. Install it once: `ollama pull paraphrase-multilingual:278m`
+  (optional `ollama.embed_model` in `config/setup.json`). Without it, finding falls back to words.
+- "Where is X": `site_map(find=...)` returns the top 3 with the way to each and shows match 1 (opens the
+  page / menu and outlines it; its number works with `click`). "Introduce the site": `site_map(outline)`.
+- Maps are saved in `%LOCALAPPDATA%\desktop_ai_agent\site_maps\<site>.json` (outside the repo).
+
 ### Actions (registry risk)
 
 | Action | Risk | Notes |
@@ -117,6 +130,7 @@ Voice / TTS / screenshot / UI Automation packages are part of the startup instal
 | `open_app` | medium | indexed launchers only; no launch args |
 | `web_open` | medium | `http` / `https` only; new tab in the agent's browser |
 | `browser_go` | medium | back / forward / reload |
+| `site_map` | medium | map (only when asked) / find (top 3, shows match 1) / show 2-3 / outline |
 | `move_mouse` | medium | by element number (model never sends raw coords); outlines it on a web page |
 | `click` | medium | left/right, optional double; rate-limited; corner emergency stop |
 | `type_text` | medium | paste into inputs; Enter only via `submit` in web search fields; no passwords |

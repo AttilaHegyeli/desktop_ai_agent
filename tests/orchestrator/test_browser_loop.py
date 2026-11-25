@@ -87,3 +87,23 @@ class TestCloudFlag(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFinalReply(unittest.TestCase):
+    def test_a_result_with_its_own_reply_ends_the_turn(self):
+        spec = ActionSpec("site_map", "map", Risk.MEDIUM, (Param("action", "string", "a"), *INJECTED))
+        reply = {"mapped": "example.com", "final_reply": "The site is mapped (3 pages)."}
+        ex = Executor(ActionRegistry([spec]), {"site_map": lambda args: dict(reply)})
+        client = ScriptedClient([tools(call("site_map", action="map"))])  # no second model round
+        result = run(client, ex, text="map this site")
+        self.assertEqual((result.status, result.text), ("done", "The site is mapped (3 pages)."))
+
+    def test_a_failed_step_does_not_end_the_turn(self):
+        spec = ActionSpec("site_map", "map", Risk.MEDIUM, (Param("action", "string", "a"),))
+
+        def fail(args):
+            raise PermissionError("ask first")
+
+        ex = Executor(ActionRegistry([spec]), {"site_map": fail})
+        client = ScriptedClient([tools(call("site_map", action="map")), ChatTurn(content="Shall I map it?")])
+        self.assertEqual(run(client, ex).text, "Shall I map it?")

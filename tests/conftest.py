@@ -32,6 +32,23 @@ def _no_real_browser(monkeypatch: pytest.MonkeyPatch) -> None:
     page_control.reset()
 
 
+@pytest.fixture(autouse=True)
+def _no_real_ollama_or_maps(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """No test may call the real Ollama for embeddings or write a site map into the
+    user's real %LOCALAPPDATA%: maps go to the test's own temporary folder."""
+    from desktop_ai_agent.action.tools import site_map
+    from desktop_ai_agent.core import embeddings
+
+    def refuse(url: str, body: object, timeout: float) -> object:
+        raise OSError("tests never call the real Ollama")
+
+    monkeypatch.setattr(embeddings, "_post", refuse)
+    monkeypatch.setattr(embeddings, "settings", lambda: (embeddings.DEFAULT_MODEL, embeddings.DEFAULT_HOST))
+    monkeypatch.setattr(site_map, "_root", lambda: tmp_path / "site_maps")
+    site_map.reset()
+    site_map.allow()
+
+
 @pytest.fixture
 def sample_entries() -> list[dict[str, str]]:
     return [

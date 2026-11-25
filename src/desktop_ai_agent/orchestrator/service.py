@@ -105,21 +105,26 @@ class AgentService:
 
     def reset(self) -> None:
         """Forget the conversation (e.g. a 'New chat' button)."""
-        from desktop_ai_agent.action.tools import page_control, ui_control, window_control
+        from desktop_ai_agent.action.tools import page_control, site_map, ui_control, window_control
 
         self.client.clear()
         ui_control.reset()
         window_control.reset()
         page_control.reset()  # cloud OKs for private sites last until New chat
+        site_map.reset()
 
     def stop(self) -> None:
         """Ask the running task to stop: cuts the model reply, skips pending steps.
 
-        A step that is already executing (e.g. a long wait) finishes first.
+        A step that is already executing (e.g. a long wait) finishes first; a site map
+        being made stops after its current page and keeps what it has (partial).
         """
+        from desktop_ai_agent.action.tools import site_map
+
         if not self._busy:
             return
         self._stop.set()
+        site_map.cancel()
         abort = getattr(self.client, "abort", None)
         if abort:
             abort()
@@ -136,6 +141,9 @@ class AgentService:
                 return False
             self._busy = True
             self._stop.clear()
+        from desktop_ai_agent.action.tools import site_map
+
+        site_map.allow()  # a Stop of the previous task must not stop this one's map
 
         def work() -> None:
             try:

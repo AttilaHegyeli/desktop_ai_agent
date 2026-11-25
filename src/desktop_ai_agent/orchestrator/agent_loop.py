@@ -6,6 +6,7 @@ hands plans to the executor (action). All safety lives in the executor.
 Stop conditions (so a confused model can't loop forever and burn tokens):
   - model answers without tool calls            -> "done"
   - an ends_turn action (provide_script) succeeds -> "done", text = its output as JSON
+  - a result carries "final_reply" (a plain site map) -> "done", text = that reply
   - user declines a high-risk step              -> "declined"
   - too many consecutive failed rounds          -> "failed"
   - too many rounds overall                     -> "max_rounds"
@@ -169,7 +170,7 @@ def leaked_tool_calls(text: str, registry: Any) -> list[dict[str, Any]]:
 
 
 # Actions that can change what is on screen; mid-task vision refresh only after these.
-_UI_CHANGING = frozenset({"wait", "open_app", "web_open", "click", "window_control", "browser_go"})
+_UI_CHANGING = frozenset({"wait", "open_app", "web_open", "click", "window_control", "browser_go", "site_map"})
 
 # Large tool results that go stale: only the newest copy stays in the chat history.
 _SUPERSEDED = {
@@ -195,7 +196,9 @@ _FOLLOW_UPS: dict[str, tuple[dict[str, Any], ...]] = {
 }
 
 # Actions after which an earlier element list no longer matches the screen.
-_STALES_ELEMENTS = frozenset({"open_app", "web_open", "click", "type_text", "window_control", "browser_go"})
+_STALES_ELEMENTS = frozenset({
+    "open_app", "web_open", "click", "type_text", "window_control", "browser_go", "site_map",
+})
 
 # When the chat fills this share of the context window, restart it with a handoff note.
 HANDOFF_AT = 0.85
@@ -477,6 +480,15 @@ def _ends_turn_text(executor: Executor, results: list[StepResult]) -> str | None
     return json.dumps(finals[-1].output, ensure_ascii=False)  # compact, one line
 
 
+def _final_reply_text(results: list[StepResult]) -> str | None:
+    """A result that carries its own reply ("final_reply") ends the turn with it: code
+    wrote the answer, so the model needs no extra round (owner's rule for site maps)."""
+    for r in reversed(results):
+        if r.ok and isinstance(r.output, dict) and isinstance(r.output.get("final_reply"), str):
+            return r.output["final_reply"]
+    return None
+
+
 def _refresh_screen(client: Any, executor: Executor, emit: EventFn) -> None:
     b64 = _capture_b64(executor, emit)
     if b64:
@@ -631,6 +643,8 @@ def _run_round(
     if len(results) == len(plan) and all(r.ok for r in results):
         # Stop on an ends_turn action instead of asking the model to comment on it again.
         text = _ends_turn_text(executor, results)
+        if text is None:
+            text = _final_reply_text(results)
         if text is not None:
             emit("final", text)
             return TaskResult("done", text, state.round_no)
