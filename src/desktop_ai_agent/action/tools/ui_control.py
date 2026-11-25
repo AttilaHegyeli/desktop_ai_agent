@@ -4,13 +4,19 @@ Flow the model follows:
   1. list_elements(area)   -> numbered list of visible clickable elements (remembered here)
   2. move_mouse(element)   -> rescan, then put the pointer on its centre (and click)
 
+Web pages use the same tools. When the agent's own browser is in front (or area is
+"page") the list comes from the page itself through ``page_control``, and click /
+type_text / move_mouse act inside the page by that number (no real mouse). When the
+user's OWN browser is in front, its page is handed over to the agent's browser first.
+Only one list is valid at a time, desktop or page, so a number always means one thing.
+
 The model only ever passes an area name, an element number and a mouse button.
 Absolute-coordinate helpers live in ``pointer_control`` (hand / sensors).
 
 Safety (shared with pointer_control via mouse_safety):
   - after a click the element list is cleared
   - click rate limits and emergency corner stop
-  - risky element names refused; type_text never presses Enter
+  - risky element names refused; type_text presses Enter only in web search fields
 """
 from __future__ import annotations
 
@@ -18,15 +24,17 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from desktop_ai_agent.action.tools import mouse_safety, mouse_win32
+from desktop_ai_agent.action.tools import mouse_safety, mouse_win32, page_control
 from desktop_ai_agent.input.element_ranking import rank_by_request
+from desktop_ai_agent.input.page_elements import TEXT_TYPES as PAGE_TEXT_TYPES
+from desktop_ai_agent.input.page_elements import PageElement
 from desktop_ai_agent.input.ui_elements import (
     UiElement,
     format_for_model,
     match_element,
 )
 
-AREAS = ("active", "taskbar", "desktop", "all")
+AREAS = ("active", "taskbar", "desktop", "all", "page")
 BUTTONS = mouse_safety.BUTTONS
 MAX_AGE_SECONDS = 60.0
 MAX_LISTED = 60
@@ -40,14 +48,15 @@ MAX_TEXT = mouse_safety.MAX_TEXT
 _DESKTOP_CLASSES = ("Progman", "WorkerW")
 _RISKY = re.compile(
     r"\b(delete|remove|uninstall|send|pay|buy|purchase|format|erase|"
-    r"sign\s*out|log\s*out|shut\s*down|restart)\b",
+    r"sign\s*out|log\s*out|shut\s*down|restart|"
+    r"turn\s*in|hand\s*in|unsubmit|submit|post|publish|merge|comment)\b",  # web: school work, posts
     re.IGNORECASE,
 )
 
 
 @dataclass
 class _LastList:
-    elements: dict[int, UiElement] = field(default_factory=dict)
+    elements: dict[int, UiElement | PageElement] = field(default_factory=dict)
     taken_at: float = 0.0
 
 
@@ -104,9 +113,21 @@ def by_window_order(elements: list[UiElement], z_order: list[int]) -> list[UiEle
     return sorted(elements, key=lambda e: rank.get(e.hwnd, len(rank)))
 
 
-def risky_word(name: str) -> str | None:
-    match = _RISKY.search(name or "")
-    return match.group(0) if match else None
+_PLACEHOLDER = re.compile(r"(\.\.\.|\u2026)\s*$")  # "Add a comment..." ends like a box's placeholder
+
+
+def risky_word(name: str, web: bool = False) -> str | None:
+    """The risky word in an element's name, or None.
+
+    On a web page (`web`), "comment" in a placeholder name ("Add a comment...") is not
+    risky: that only opens the box (owner, 2026-11-25: the agent may type a comment, the
+    user sends it). The send button itself is caught by page_control's page-code check.
+    """
+    for match in _RISKY.finditer(name or ""):
+        if web and match.group(0).casefold() == "comment" and _PLACEHOLDER.search(name):
+            continue
+        return match.group(0)
+    return None
 
 
 def _bounds(monitors: list[Any]) -> tuple[int, int, int, int] | None:
@@ -124,15 +145,28 @@ def _on_a_monitor(x: int, y: int, monitors: list[Any]) -> bool:
     return any(m.left <= x < m.right and m.top <= y < m.bottom for m in monitors)
 
 
-def list_elements(area: str = "active", request: str = "") -> dict[str, Any]:
+def list_elements(area: str = "active", request: str = "", cloud: bool = False) -> dict[str, Any]:
     """Scan once, keep ``area``, remember the list and return it as numbered text.
 
     Elements matching ``request`` (the user's words) are moved first BEFORE the list is
     cut to ``MAX_LISTED``, so the one the user means is not cut off in a busy window.
+    A web page in front (or area "page") is listed from the page; ``cloud`` says the
+    model runs in the cloud (private sites then need the user's OK first).
     """
     global _last, _cleared_by
     if area not in AREAS:
         raise ValueError(f"area must be one of {list(AREAS)}, got '{area}'")
+    if area in ("active", "page"):
+        front = _foreground()
+        hwnd = front[0] if front else None
+        kind = _browser_kind(hwnd)
+        if area == "page" or kind == "agent":
+            return _remember_page(*_list_page(request, cloud, hwnd if kind == "user" else None, False))
+        if kind == "user":
+            try:
+                return _remember_page(*_list_page(request, cloud, hwnd, True))
+            except page_control.HandOverFailed:
+                pass  # not a web page (e.g. a new-tab page): list the window as usual
     monitors = _monitors()
     elements = _scan(_bounds(monitors))
     picked = filter_area(elements, area, _foreground() if area == "active" else None)
@@ -180,7 +214,25 @@ def _check_emergency_stop(monitors: list[Any]) -> None:
         )
 
 
-def _resolve(element: int, monitors: list[Any]) -> UiElement:
+def user_browser_in_front() -> int | None:
+    """Window handle of the user's OWN browser when it is in front, else None."""
+    front = _foreground()
+    hwnd = front[0] if front else None
+    return hwnd if _browser_kind(hwnd) == "user" else None
+
+
+def remember_page_elements(elements: list[PageElement]) -> None:
+    """Page elements another tool numbered (site_map's shown match): click takes them too."""
+    _remember_page(elements, {})
+
+
+def _remember_page(shown: list[PageElement], result: dict[str, Any]) -> dict[str, Any]:
+    global _last, _cleared_by
+    _last, _cleared_by = _LastList({e.id: e for e in shown}, _now()), None
+    return result
+
+
+def _resolve(element: int, monitors: list[Any]) -> UiElement | PageElement:
     if _last is None:
         if _cleared_by:
             raise LookupError(
@@ -197,6 +249,8 @@ def _resolve(element: int, monitors: list[Any]) -> UiElement:
     old = _last.elements.get(element)
     if old is None:
         raise LookupError(f"Element {element} is not in the latest list. Use a number from that list.")
+    if isinstance(old, PageElement):
+        return old  # page_control finds it again by its reference when it acts
     fresh = match_element(old, _scan(_bounds(monitors)))
     if fresh is None:
         raise LookupError(
@@ -228,13 +282,19 @@ def move_mouse(element: int) -> dict[str, Any]:
     monitors = _monitors()
     _check_emergency_stop(monitors)
     target = _resolve(element, monitors)
+    if isinstance(target, PageElement):
+        return page_control.highlight(target)
     x, y = target.center
     _set_cursor(x, y)
     return {"moved_to": target.name, "type": target.type, "window": target.app, "x": x, "y": y}
 
 
-def click(element: int, button: str = "left", double: bool = False) -> dict[str, Any]:
-    """Move onto an element from the latest list and click it once (or double-click)."""
+def click(element: int, button: str = "left", double: bool = False, request: str = "") -> dict[str, Any]:
+    """Move onto an element from the latest list and click it once (or double-click).
+
+    A page element is clicked inside the page; ``request`` (the user's latest message)
+    decides whether a cookie / consent button may be pressed.
+    """
     global _last, _cleared_by
     if button not in BUTTONS:
         raise ValueError(f"button must be one of {list(BUTTONS)}, got '{button}'")
@@ -242,11 +302,18 @@ def click(element: int, button: str = "left", double: bool = False) -> dict[str,
     _check_emergency_stop(monitors)
     now = _check_rate()
     target = _resolve(element, monitors)
-    word = risky_word(target.name)
+    word = risky_word(target.name, web=isinstance(target, PageElement))
     if word:
         raise PermissionError(
             f"'{target.name}' looks risky ('{word}'). Do not click it: ask the user to do this themselves."
         )
+    if isinstance(target, PageElement):
+        page_control.check_consent_click(target.name, request)
+        consent = page_control.consent_choice(target.name) is not None  # answered: its form may submit
+        result = page_control.click(target, button, double, check_code=not consent)
+        mouse_safety.record_click(now)
+        _last, _cleared_by = None, "click"
+        return result
     x, y = target.center
     _set_cursor(x, y)
     _click(button, 2 if double else 1)
@@ -264,8 +331,12 @@ def click(element: int, button: str = "left", double: bool = False) -> dict[str,
     }
 
 
-def type_text(element: int, text: str) -> dict[str, Any]:
-    """Click into an input field from the latest list and paste ``text`` there."""
+def type_text(element: int, text: str, submit: bool = False) -> dict[str, Any]:
+    """Click into an input field from the latest list and paste ``text`` there.
+
+    On a web page the field is filled inside the page; ``submit`` presses Enter, which
+    is allowed only in web search fields.
+    """
     global _last, _cleared_by
     if not text:
         raise ValueError("text must not be empty")
@@ -275,6 +346,18 @@ def type_text(element: int, text: str) -> dict[str, Any]:
     _check_emergency_stop(monitors)
     now = _check_rate()
     target = _resolve(element, monitors)
+    if isinstance(target, PageElement):
+        if target.type not in PAGE_TEXT_TYPES:
+            raise ValueError(
+                f"Element {element} ('{target.name}') is a {target.type}, not an input field. "
+                "Pick an Edit, SearchBox or ComboBox element from the list."
+            )
+        result = page_control.type_into(target, text, submit)
+        mouse_safety.record_click(now)
+        _last, _cleared_by = None, "typing"
+        return result
+    if submit:
+        raise ValueError("submit (Enter) works only in search fields on web pages. Call type_text without submit.")
     if target.type not in TEXT_TYPES:
         raise ValueError(
             f"Element {element} ('{target.name}') is a {target.type}, not an input field. "
@@ -310,6 +393,14 @@ def _z_order() -> list[int]:  # pragma: no cover - needs Windows
         return z_order()
     except OSError:
         return []  # no order known: the list keeps screen order
+
+
+def _browser_kind(hwnd: int | None) -> str | None:  # pragma: no cover - needs Windows
+    return page_control.browser_kind(hwnd)
+
+
+def _list_page(request: str, cloud: bool, handover_hwnd: int | None, strict: bool) -> Any:  # pragma: no cover
+    return page_control.list_page(request, cloud, handover_hwnd, strict=strict)
 
 
 def _foreground() -> tuple[int, str] | None:  # pragma: no cover

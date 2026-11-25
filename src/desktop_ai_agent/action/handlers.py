@@ -14,11 +14,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+from desktop_ai_agent.action.tools import page_control as _page_control
+from desktop_ai_agent.action.tools import site_map as _site_map
 from desktop_ai_agent.action.tools import ui_control as _ui_control
 from desktop_ai_agent.action.tools import window_control as _window_control
 from desktop_ai_agent.action.tools import window_wait as _window_wait
 from desktop_ai_agent.action.tools.screenshot import capture_screen
-from desktop_ai_agent.action.tools.web_open import open_url as _open_url
 from desktop_ai_agent.action.tools.web_search import search_web as _search_web
 
 
@@ -50,18 +51,62 @@ def web_search(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def web_open(args: dict[str, Any]) -> dict[str, Any]:
-    """Open an http(s) URL in the user's default browser and wait for its window."""
-    return _with_page_window(lambda: _open_url(args["url"]))
+    """Open an http(s) URL in a new tab of the agent's own browser (it waits for the page)."""
+    return _open_in_browser(args["url"])
 
 
-def _with_page_window(open_page: Any) -> dict[str, Any]:
-    # Seam: tests replace it, so no real window is ever enumerated or focused.
-    return _window_wait.open_page_window(open_page)
+def _open_in_browser(url: str) -> dict[str, Any]:
+    # Seam: tests replace it, so no real browser is ever started.
+    return _page_control.open_url(url)
 
 
 def list_elements(args: dict[str, Any]) -> dict[str, Any]:
-    """Numbered list of visible clickable elements (UI Automation), matches to the request first."""
-    return _ui_control.list_elements(args.get("area", "active"), args.get("request", ""))
+    """Numbered clickable elements of the screen area or the web page, matches to the request first."""
+    return _ui_control.list_elements(
+        args.get("area", "active"), args.get("request", ""), args.get("cloud", False)
+    )
+
+
+def browser_read(args: dict[str, Any]) -> dict[str, Any]:
+    """Text of the web page in front (handed over from the user's browser) or the agent's tab."""
+    return _page_control.read(
+        args.get("find"),
+        args.get("part", 1),
+        args.get("request", ""),
+        args.get("cloud", False),
+        _ui_control.user_browser_in_front(),
+    )
+
+
+def browser_go(args: dict[str, Any]) -> dict[str, Any]:
+    """Back / forward / reload in the agent's current tab. Old element numbers are stale after it."""
+    result = _page_control.go(args["action"])
+    _ui_control.clear_list_after_action("browser_go")
+    return result
+
+
+def scroll(args: dict[str, Any]) -> dict[str, Any]:
+    """Scroll the agent's page down or up by about one screen."""
+    result = _page_control.scroll(args["direction"], _ui_control.user_browser_in_front())
+    _ui_control.clear_list_after_action("scroll")  # the list that follows brings the new view
+    return result
+
+
+def site_map(args: dict[str, Any]) -> dict[str, Any]:
+    """Map a site, find where something is on it (shown on the page), or outline it."""
+    result, shown = _site_map.run(
+        args["action"],
+        args.get("find"),
+        args.get("number"),
+        args.get("request", ""),
+        args.get("cloud", False),
+        _ui_control.user_browser_in_front(),
+    )
+    if shown is not None:
+        _ui_control.remember_page_elements([shown])  # its number works with click
+    elif "shown" in result:
+        _ui_control.clear_list_after_action("site_map")  # the page changed under the old list
+    return result
 
 
 def list_windows(args: dict[str, Any]) -> dict[str, Any]:
@@ -80,13 +125,15 @@ def move_mouse(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def click(args: dict[str, Any]) -> dict[str, Any]:
-    """Pointer onto a listed element's centre, then one click."""
-    return _ui_control.click(args["element"], args.get("button", "left"), args.get("double", False))
+    """Pointer onto a listed element's centre, then one click (inside the page for web elements)."""
+    return _ui_control.click(
+        args["element"], args.get("button", "left"), args.get("double", False), args.get("request", "")
+    )
 
 
 def type_text(args: dict[str, Any]) -> dict[str, Any]:
-    """Click into a listed input field and paste text. Never presses Enter."""
-    return _ui_control.type_text(args["element"], args["text"])
+    """Enter text into a listed input field. Enter only with submit, in web search fields."""
+    return _ui_control.type_text(args["element"], args["text"], args.get("submit", False))
 
 
 # ---- open_app ----------------------------------------------------------------
@@ -207,6 +254,10 @@ HANDLERS = {
     "web_search": web_search,
     "web_open": web_open,
     "list_elements": list_elements,
+    "browser_read": browser_read,
+    "browser_go": browser_go,
+    "scroll": scroll,
+    "site_map": site_map,
     "list_windows": list_windows,
     "window_control": window_control,
     "move_mouse": move_mouse,

@@ -271,7 +271,9 @@ class ChatClient:
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"Ollama chat HTTP {exc.code}: {detail}") from exc
-        except (urllib.error.URLError, OSError, ValueError) as exc:
+        except (urllib.error.URLError, OSError, ValueError, AttributeError) as exc:
+            # Stop closes the response from the UI thread; http.client then fails inside
+            # readline() (AttributeError: 'NoneType' object has no attribute 'peek').
             if self._aborted:
                 raise ChatCancelled("stopped") from exc
             if isinstance(exc, urllib.error.URLError):

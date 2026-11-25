@@ -23,6 +23,26 @@ class TestWords(unittest.TestCase):
         self.assertFalse(words_match("to", "today"))  # too short for a prefix match
         self.assertFalse(words_match("play", "replay"))  # only prefixes count
         self.assertFalse(words_match("close", "clone"))
+        self.assertTrue(words_match("tab", "tabs"))
+        self.assertTrue(words_match("vol", "volume"))  # a 3-letter prefix may add 3 letters
+        self.assertFalse(words_match("the", "thekkmasaki"))  # ...but not 8 (GitHub ranking bug)
+
+    def test_accents_are_ignored(self):
+        self.assertEqual(words("Beállítások, Súgó"), {"beallitasok", "sugo"})
+        self.assertTrue(words_match("beallitasok", "beallitasok"))
+
+    def test_one_typo_only_for_ranking_and_long_words(self):
+        self.assertTrue(words_match("bealitasok", "beallitasok", typos=True))  # one missing letter
+        self.assertTrue(words_match("setings", "settings", typos=True))
+        self.assertFalse(words_match("bealitasok", "beallitasok"))  # window_control stays strict
+        self.assertFalse(words_match("cart", "card", typos=True))  # too short to guess
+        self.assertFalse(words_match("setting", "sitting2", typos=True))  # two letters differ
+
+    def test_filler_and_command_words_do_not_rank(self):
+        names = ["Chris Bumstead The Recovery Protocol", "Beállítások", "Súgó"]
+        self.assertEqual(ranked("go to my profile then select bealitasok", names)[0], "Beállítások")
+        self.assertEqual(ranked("then open the", names), names)  # only filler: order unchanged
+        self.assertEqual(scores("click the", names), [0.0, 0.0, 0.0])
 
 
 class TestRanking(unittest.TestCase):

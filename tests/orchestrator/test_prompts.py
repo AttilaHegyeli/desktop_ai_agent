@@ -14,7 +14,7 @@ from desktop_ai_agent.orchestrator.prompts import (
 _NAMED_IN_PROMPT = frozenset(
     {
         "provide_script", "web_search", "web_open", "screenshot", "list_elements", "move_mouse",
-        "click", "type_text", "wait", "window_control",
+        "click", "type_text", "wait", "window_control", "browser_read", "site_map", "scroll",
     }
 )
 
@@ -77,3 +77,9 @@ class TestSystemPrompt(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWebDrafts(unittest.TestCase):
+    def test_comments_are_typed_never_sent(self):
+        self.assertIn("never log in, post, send, submit", SYSTEM_PROMPT)
+        self.assertIn("ready for them to send", SYSTEM_PROMPT)

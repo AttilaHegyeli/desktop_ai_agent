@@ -229,5 +229,37 @@ class TestContextUsageAndAbort(unittest.TestCase):
             client.chat(tools=TOOLS)
         self.assertEqual(client.messages[-1]["role"], "user")  # no half reply stored
 
+    def test_stop_while_reading_is_a_clean_cancel(self):
+        """Stop closes the response from another thread; http.client then raises
+        AttributeError ('NoneType' object has no attribute 'peek') inside readline()."""
+        from desktop_ai_agent.core.chat_client import ChatCancelled
+
+        client = ChatClient("m", system="s")
+        client.add_user("hi")
+
+        class ClosedMidRead(FakeResponse):
+            def readline(self):
+                client.abort()
+                raise AttributeError("'NoneType' object has no attribute 'peek'")
+
+            def close(self):
+                pass
+
+        with mock.patch("urllib.request.urlopen", lambda req, timeout=None: ClosedMidRead([])):
+            with self.assertRaises(ChatCancelled):
+                client.chat(tools=TOOLS)
+
+    def test_the_same_error_without_stop_is_not_hidden(self):
+        client = ChatClient("m", system="s")
+        client.add_user("hi")
+
+        class Broken(FakeResponse):
+            def readline(self):
+                raise AttributeError("real bug")
+
+        with mock.patch("urllib.request.urlopen", lambda req, timeout=None: Broken([])):
+            with self.assertRaisesRegex(AttributeError, "real bug"):
+                client.chat(tools=TOOLS)
+
 if __name__ == "__main__":
     unittest.main()

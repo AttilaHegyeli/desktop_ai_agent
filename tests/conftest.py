@@ -11,6 +11,44 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 
+@pytest.fixture(autouse=True)
+def _no_real_browser(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test may start, find or reach a real browser (AGENT.MD rule 8).
+
+    The browser session gets an opener that always refuses, the default-browser lookup
+    reads nothing, and page_control's window helpers see no windows. Tests that need a
+    browser give page_control a fake session of their own.
+    """
+    from desktop_ai_agent.action.tools import browser_session, page_control
+
+    def refuse(launch: bool, old: object) -> object:
+        raise browser_session.NotRunning("tests never open a real browser")
+
+    monkeypatch.setattr(browser_session, "_read_default_command", lambda: "")
+    monkeypatch.setattr(browser_session, "SESSION", browser_session.BrowserSession(opener=refuse))
+    monkeypatch.setattr(page_control, "_windows", lambda: [])
+    monkeypatch.setattr(page_control, "_address_of", lambda hwnd: None)
+    monkeypatch.setattr(page_control, "_bring_to_front", lambda hwnd: False)
+    page_control.reset()
+
+
+@pytest.fixture(autouse=True)
+def _no_real_ollama_or_maps(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """No test may call the real Ollama for embeddings or write a site map into the
+    user's real %LOCALAPPDATA%: maps go to the test's own temporary folder."""
+    from desktop_ai_agent.action.tools import site_map
+    from desktop_ai_agent.core import embeddings
+
+    def refuse(url: str, body: object, timeout: float) -> object:
+        raise OSError("tests never call the real Ollama")
+
+    monkeypatch.setattr(embeddings, "_post", refuse)
+    monkeypatch.setattr(embeddings, "settings", lambda: (embeddings.DEFAULT_MODEL, embeddings.DEFAULT_HOST))
+    monkeypatch.setattr(site_map, "_root", lambda: tmp_path / "site_maps")
+    site_map.reset()
+    site_map.allow()
+
+
 @pytest.fixture
 def sample_entries() -> list[dict[str, str]]:
     return [
